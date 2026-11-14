@@ -66,3 +66,39 @@ jobs:
           path: output/*
           if-no-files-found: error
           retention-days: 30
+
+  android-smoke:
+    needs: build-apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: latula-v0.01-test
+          path: output
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install websocket-client
+      - name: Enable hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install, launch and exercise the actual APK
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048M
+          disable-animations: true
+          script: python frontend/tests/android-smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: latula-android-checks
+          path: output/android-checks/
+          if-no-files-found: ignore

@@ -59,7 +59,7 @@ function go(target) {
   if (target === 'workbench' && !active.value) { notify('先装配一个工作流，再开始创作'); target = 'assemble' }
   page.value = target; selectedTaskId.value = ''; draft.value = null
   location.hash = target
-  nextTick(() => document.querySelector('.page-body')?.scrollTo({ top: 0 }))
+  nextTick(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' }))
 }
 function back() {
   if (exitOpen.value) { exitOpen.value = false; return }
@@ -191,7 +191,7 @@ async function pollAll() {
 }
 async function cancel(task) { try { await cancelTask(copy(task)); await patch(task, { status: 'CANCELED', detail: '已从服务端待执行队列移除' }); notify('排队任务已移除') } catch (error) { notify(error.message) } }
 async function favorite(task) { await patch(task, { favorite: !task.favorite }); tap() }
-function openTask(task) { page.value = 'history'; selectedTaskId.value = task.id; tap() }
+function openTask(task) { page.value = 'history'; selectedTaskId.value = task.id; nextTick(() => window.scrollTo({ top: 0, behavior: 'instant' })); tap() }
 async function reuse(task) {
   let workflow = config.workflows.find(item => item.id === task.workflow.id)
   if (!workflow) { workflow = copy(task.workflow); config.workflows.push(workflow) }
