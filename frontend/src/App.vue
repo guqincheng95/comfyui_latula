@@ -567,12 +567,12 @@ onBeforeUnmount(() => {
     <section class="hero">
       <div class="hero-top">
         <div>
-          <div class="eyebrow">COMFYUI LATULA · RUNWAY ACT-TWO</div>
+          <div class="eyebrow">拉图 · RUNWAY ACT-TWO</div>
           <h1>动作迁移</h1>
         </div>
         <button type="button" class="settings-button" @click="settingsOpen = !settingsOpen">后端</button>
       </div>
-      <p>角色参考 + 动作视频，手机直接提交生成。</p>
+      <p>上传角色与动作参考，提交给 Runway 生成并取回结果。</p>
       <button type="button" class="backend-chip" @click="settingsOpen = true">
         <span :class="{ online: backendState.startsWith('已连接') }"></span>
         {{ backendState }}

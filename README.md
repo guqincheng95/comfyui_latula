@@ -1,8 +1,12 @@
-# comfyui_latula
+# 拉图 · comfyui_latula
 
-一个以 Android 手机为入口的 AI 工作流应用项目，复用原 Act-Two-Mobile 仓库。
+「拉图」是连接 ComfyUI 或其他 AI API 的 Android 前端，名称寓意从工作流或 API 中拉取图片与生成结果。复用原 Act-Two-Mobile 仓库。
 
-当前版本：0.3.0（项目改名与二次开发准备）。APK 显示名称为「comfyui latula」。
+APK 负责提供直观方便的操作界面：选择应用与服务、填写提示词和参数、上传素材、提交请求、查看任务，以及预览、下载和管理结果。图片、视频的生成和模型推理由所连接的电脑或云端服务执行，APK 本身不承担生成算力。
+
+以上描述为产品定位；当前已实现与后续计划的能力以下文为准。
+
+当前版本：0.3.0（项目改名与二次开发准备）。APK 中文显示名称为「拉图」，仓库名称为 `comfyui_latula`。
 
 现有可调用模块仍为 Runway Act-Two。RunningHub AI 应用、RunningHub 工作流、本地及自建云 ComfyUI 是后续接入方向，当前尚未实现，不将它们展示为可用功能。
 
