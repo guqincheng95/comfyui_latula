@@ -14,6 +14,8 @@ APK 负责提供直观方便的操作界面：选择应用与服务、填写提�
 
 技术借鉴来源确定为 ComfyChair、ComfyUIMobileApp、Comfy Remote；后续首页采用道具式图标和点击/互动动效。详见 [UI 设计计划](docs/UI_DESIGN_PLAN.md)，本轮只完善计划，尚未实施界面改造。
 
+第一阶段已按用户像素港湾参考图细化为三个入口：装配工作流、进入工作流、历史任务。边缘高亮、表单操作、图鉴和底部辅助功能详见 [第一阶段功能与交互规格](docs/PHASE1_SPEC.md)；这些新功能仍为待实现规格。
+
 Android applicationId 保持 `com.acttwomobile.app`，原后端地址和任务记录使用的存储键保持兼容。能否覆盖安装还取决于相同签名和递增的 Android versionCode；现有 CI 仍为 debug 构建，尚未建立固定签名基线。
 
 ## 已实现
