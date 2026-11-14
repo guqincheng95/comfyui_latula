@@ -20,7 +20,7 @@ from app.services.runway import (
 load_dotenv()
 
 app = FastAPI(
-    title="AI-Workflow-Mobile API",
+    title="comfyui latula API",
     version="0.3.0",
 )
 

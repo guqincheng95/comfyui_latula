@@ -1,8 +1,8 @@
-# AI-Workflow-Mobile
+# comfyui_latula
 
 一个以 Android 手机为入口的 AI 工作流应用项目，复用原 Act-Two-Mobile 仓库。
 
-当前版本：0.3.0（项目改名与二次开发准备）。APK 显示名称为「AI 工作流」。
+当前版本：0.3.0（项目改名与二次开发准备）。APK 显示名称为「comfyui latula」。
 
 现有可调用模块仍为 Runway Act-Two。RunningHub AI 应用、RunningHub 工作流、本地及自建云 ComfyUI 是后续接入方向，当前尚未实现，不将它们展示为可用功能。
 

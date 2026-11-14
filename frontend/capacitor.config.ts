@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
   appId: 'com.acttwomobile.app',
-  appName: 'AI 工作流',
+  appName: 'comfyui latula',
   webDir: 'dist',
   server: {
     androidScheme: 'http',

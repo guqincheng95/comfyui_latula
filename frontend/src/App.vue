@@ -567,7 +567,7 @@ onBeforeUnmount(() => {
     <section class="hero">
       <div class="hero-top">
         <div>
-          <div class="eyebrow">AI WORKFLOW · RUNWAY ACT-TWO</div>
+          <div class="eyebrow">COMFYUI LATULA · RUNWAY ACT-TWO</div>
           <h1>动作迁移</h1>
         </div>
         <button type="button" class="settings-button" @click="settingsOpen = !settingsOpen">后端</button>
