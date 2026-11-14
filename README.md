@@ -54,7 +54,7 @@ Frontend: Vue 3 / Vite / Capacitor 8。后端继续使用原 FastAPI + Runway。
     npx playwright install chromium
     node tests/ui-check.mjs
 
-Android：GitHub Actions 自动安装依赖、检查、生成原生项目、同步插件并构建 APK。配置开发服务器时使用 npm run dev；某些受限执行环境不能读取网卡信息时，可用静态服务检查 dist。
+Android：GitHub Actions 自动安装依赖、检查、生成原生项目、同步插件并构建 APK；随后在 Android 15 / API 35 模拟器安装此 APK，运行原生网络与冷启动持久化回归。协议服务仅用于测试，不模拟真实 GPU 生成。配置开发服务器时使用 npm run dev；某些受限执行环境不能读取网卡信息时，可用静态服务检查 dist。
 
 后端使用方法保留：backend/.env 配置 RUNWAYML_API_SECRET，安装 backend/requirements.txt 后运行 uvicorn app.main:app --host 0.0.0.0 --port 8000。未配置 Runway 不影响原生 ComfyUI 路径。
 
