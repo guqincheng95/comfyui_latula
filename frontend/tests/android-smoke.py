@@ -57,7 +57,17 @@ def js(expression):
         return result.get('result', {}).get('value')
 
 def wait_text(text):
-    js("(async()=>{for(let i=0;i<100;i++){if(document.body.innerText.includes(" + json.dumps(text) + "))return true;await new Promise(r=>setTimeout(r,200))}throw Error('UI timeout: '+" + json.dumps(text) + ")})()")
+    # A new Android WebView exposes DevTools before its document/body exists.
+    # Poll across initial document/context changes instead of failing startup early.
+    for _ in range(180):
+        try:
+            if js("Boolean(document.body?.innerText?.includes(" + json.dumps(text) + "))"):
+                print('UI ready:', text, flush=True)
+                return
+        except (AssertionError, websocket.WebSocketException):
+            pass
+        time.sleep(0.25)
+    raise AssertionError('UI timeout: ' + text + '; page=' + str(js('document.body?.innerText')))
 
 def click(text):
     js("(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===" + json.dumps(text) + "||b.textContent.trim()===" + json.dumps(text) + ");if(!b)throw Error('Missing button');b.click()})()")
@@ -107,6 +117,7 @@ try:
     assert job['request']['prompt']['2']['inputs']['text'] == 'Android 原生网络协议验证', job
     assert job['request']['prompt']['1']['inputs']['image'] == 'latula/uploaded-reference.png', job
     click('收藏任务')
+    time.sleep(0.5)  # Let the IndexedDB transaction commit before killing the process.
     # Cold process restart tests native Preferences + WebView history persistence.
     ws.close()
     adb('shell', 'am', 'force-stop', APP)
