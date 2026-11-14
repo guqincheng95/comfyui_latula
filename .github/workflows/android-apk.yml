@@ -45,6 +45,7 @@ jobs:
           p.write_text(text)
           import shutil
           shutil.copyfile("native/latula_launcher.xml", "android/app/src/main/res/drawable/latula_launcher.xml")
+          shutil.copyfile("native/latula_styles.xml", "android/app/src/main/res/values/styles.xml")
           p = Path("android/app/build.gradle")
           text = p.read_text().replace("versionCode 1", "versionCode 301").replace('versionName "1.0"', 'versionName "0.01"')
           p.write_text(text)

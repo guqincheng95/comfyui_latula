@@ -2,9 +2,12 @@
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 import json, time
+from email.parser import BytesParser
+from email import policy
 ROOT=Path(__file__).resolve().parent.parent
 GRAPH=json.loads((ROOT/'tests/fixtures/basic-api.json').read_text())
 JOBS={}
+UPLOADS=[]
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*a,**kw):super().__init__(*a,directory=str(ROOT/'dist'),**kw)
     def end_headers(self):
@@ -35,11 +38,26 @@ class Handler(SimpleHTTPRequestHandler):
         if p=='/test-captured':return self.out(JOBS)
         return super().do_GET()
     def do_POST(self):
-        body=self.rfile.read(int(self.headers.get('Content-Length',0)))
-        if self.path=='/mock/upload/image':return self.out({'name':'uploaded-reference.png','subfolder':'latula','type':'input'})
+        if self.headers.get('Transfer-Encoding','').lower()=='chunked':
+            chunks=[]
+            while True:
+                size=int(self.rfile.readline().split(b';',1)[0],16)
+                if not size:
+                    while self.rfile.readline().strip():pass
+                    break
+                chunks.append(self.rfile.read(size));self.rfile.read(2)
+            body=b''.join(chunks)
+        else:body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+        if self.path=='/mock/upload/image':
+            message=BytesParser(policy=policy.default).parsebytes(('Content-Type: '+self.headers.get('Content-Type','')+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
+            parts=list(message.iter_parts()) if message.is_multipart() else []
+            media=next((part for part in parts if part.get_param('name',header='content-disposition')=='image' and part.get_filename()),None)
+            if media is None or not media.get_payload(decode=True):return self.out({'detail':'Expected non-empty multipart media upload'},400)
+            UPLOADS.append({'filename':media.get_filename(),'size':len(media.get_payload(decode=True))})
+            return self.out({'name':'uploaded-reference.png','subfolder':'latula','type':'input'})
         if self.path=='/mock/prompt':
             payload=json.loads(body);key='protocol-'+str(len(JOBS)+1)
-            JOBS[key]={'created':time.time(),'request':payload}
+            JOBS[key]={'created':time.time(),'request':payload,'uploads':list(UPLOADS)}
             return self.out({'prompt_id':key,'number':0,'node_errors':{}})
         if self.path=='/mock/queue':return self.out({})
         return self.out({'error':'unknown'},404)

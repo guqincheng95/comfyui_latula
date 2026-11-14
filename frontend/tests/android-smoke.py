@@ -23,13 +23,15 @@ def adb(*args, **kwargs):
     return subprocess.check_output(['adb', *args], **kwargs)
 
 def screenshot(name):
+    time.sleep(0.5)  # Allow WebView compositing to catch up with DOM assertions.
     (OUT / (name + '.png')).write_bytes(adb('exec-out', 'screencap', '-p'))
 
 def attach():
     global ws
     for _ in range(40):
         sockets = adb('shell', 'cat', '/proc/net/unix', text=True)
-        match = re.search(r'@(webview_devtools_remote_[\w.]+)', sockets)
+        pid = adb('shell', 'pidof', APP, text=True).strip().split()[0]
+        match = re.search(r'@(webview_devtools_remote_' + re.escape(pid) + r')\b', sockets)
         if match:
             adb('forward', 'tcp:9222', 'localabstract:' + match[1])
             try:
@@ -114,12 +116,15 @@ try:
     jobs = json.load(urllib.request.urlopen('http://127.0.0.1:5173/test-captured'))
     assert len(jobs) == 1, jobs
     job = next(iter(jobs.values()))
+    assert job['uploads'][0]['size'] > 0, job
     assert job['request']['prompt']['2']['inputs']['text'] == 'Android 原生网络协议验证', job
     assert job['request']['prompt']['1']['inputs']['image'] == 'latula/uploaded-reference.png', job
     click('收藏任务')
     time.sleep(0.5)  # Let the IndexedDB transaction commit before killing the process.
     # Cold process restart tests native Preferences + WebView history persistence.
     ws.close()
+    ws = None
+    adb('forward', '--remove', 'tcp:9222')
     adb('shell', 'am', 'force-stop', APP)
     adb('shell', 'am', 'start', '-W', '-n', APP + '/.MainActivity')
     attach()
