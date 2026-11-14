@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | ComfyUI 官方示例 | Python 调用示例 | 原生 HTTP + WebSocket | 本地或远程自建 ComfyUI |
 | ComfyChair | Kotlin + Jetpack Compose 原生 Android | ComfyUI API | 可连通的本地或远程 ComfyUI；不等于已适配平台专有接口 |
-| ComfyUIMobileApp | Flutter Android 客户端 + Python 服务 | 应用服务接口，由服务控制 ComfyUI | 项目文档主要面向自己的电脑 |
+| ComfyUIMobileApp | Flutter Android 客户端 + Python 管理服务 | HTTP/WS 请求；配套 Python 服务负责启停、本机素材与状态管理 | 项目文档主要面向自己的电脑 |
 | Comfy Remote | Web/PWA + Android WebView 外壳 | 网页代码直接调用 ComfyUI API | 项目文档主要面向局域网 ComfyUI |
 | Salad comfyui-api | 服务端 API 包装层，无手机 UI | HTTP 接收任务，管理 ComfyUI 执行和输出 | 自建 GPU 本地机或云实例 |
 | comfy-api-proxy | 官方服务端适配层，无手机 UI | 对外 v2 jobs/assets API，对内原生 ComfyUI API | 一代理对应一 ComfyUI；不提供多机路由 |
