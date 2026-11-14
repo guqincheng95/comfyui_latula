@@ -567,7 +567,7 @@ onBeforeUnmount(() => {
     <section class="hero">
       <div class="hero-top">
         <div>
-          <div class="eyebrow">RUNWAY · ACT-TWO</div>
+          <div class="eyebrow">AI WORKFLOW · RUNWAY ACT-TWO</div>
           <h1>动作迁移</h1>
         </div>
         <button type="button" class="settings-button" @click="settingsOpen = !settingsOpen">后端</button>
@@ -604,7 +604,7 @@ onBeforeUnmount(() => {
         </button>
         <button type="button" class="primary-small" @click="saveBackend">保存</button>
       </div>
-      <p class="backend-hint">可填写局域网或公网后端地址。当前云服务器示例：http://8.211.148.39:8000。</p>
+      <p class="backend-hint">填写你实际部署的后端地址，可使用局域网或公网服务。</p>
     </section>
 
     <section class="panel character-mode-panel">

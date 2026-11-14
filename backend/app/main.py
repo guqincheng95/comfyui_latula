@@ -20,8 +20,8 @@ from app.services.runway import (
 load_dotenv()
 
 app = FastAPI(
-    title="Act-Two-Mobile API",
-    version="0.2.1",
+    title="AI-Workflow-Mobile API",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -44,7 +44,7 @@ ALLOWED_RATIOS = {
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.2.1", "directUpload": "enabled", "characterVideo": "enabled"}
+    return {"status": "ok", "version": "0.3.0", "directUpload": "enabled", "characterVideo": "enabled"}
 
 
 class UploadInitRequest(BaseModel):

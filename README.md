@@ -1,6 +1,14 @@
-# Act-Two-Mobile
+# AI-Workflow-Mobile
 
-一个以 Android 手机为优先入口的 Runway Act-Two 轻量控制器。
+一个以 Android 手机为入口的 AI 工作流应用项目，复用原 Act-Two-Mobile 仓库。
+
+当前版本：0.3.0（项目改名与二次开发准备）。APK 显示名称为「AI 工作流」。
+
+现有可调用模块仍为 Runway Act-Two。RunningHub AI 应用、RunningHub 工作流、本地及自建云 ComfyUI 是后续接入方向，当前尚未实现，不将它们展示为可用功能。
+
+二次开发路线、接口分类、复用评估与验收标准见 [二次开发路线](docs/REDEVELOPMENT.md)。
+
+Android applicationId 保持 `com.acttwomobile.app`，原后端地址和任务记录使用的存储键保持兼容。能否覆盖安装还取决于相同签名和递增的 Android versionCode；现有 CI 仍为 debug 构建，尚未建立固定签名基线。
 
 ## 已实现
 - 手机端上传角色参考图
