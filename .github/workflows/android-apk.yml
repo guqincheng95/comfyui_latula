@@ -1,72 +1,68 @@
 name: Build Android APK
-
 on:
   push:
     branches: [main]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/android-apk.yml"
+    paths: ['frontend/**', '.github/workflows/android-apk.yml']
   workflow_dispatch:
-
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
-
-      - name: Install frontend dependencies
+      - name: Keep this test line's debug signing identity
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: latula-debug-keystore-v1
+      - name: Install and verify
         working-directory: frontend
-        run: npm install
-
-      - name: Build Vue frontend
-        working-directory: frontend
-        run: npm run build
-
+        run: |
+          npm ci
+          npm test
+          npm run build
       - name: Create Android project
         working-directory: frontend
         run: npx cap add android
-
-      - name: Allow LAN HTTP backend for testing
+      - name: Configure test build
         working-directory: frontend
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path("android/app/src/main/AndroidManifest.xml")
-          text = p.read_text(encoding="utf-8")
+          text = p.read_text()
           if 'android:usesCleartextTraffic=' not in text:
               text = text.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
-          p.write_text(text, encoding="utf-8")
+          text = text.replace('@mipmap/ic_launcher_round', '@drawable/latula_launcher').replace('@mipmap/ic_launcher', '@drawable/latula_launcher')
+          p.write_text(text)
+          import shutil
+          shutil.copyfile("native/latula_launcher.xml", "android/app/src/main/res/drawable/latula_launcher.xml")
+          p = Path("android/app/build.gradle")
+          text = p.read_text().replace("versionCode 1", "versionCode 301").replace('versionName "1.0"', 'versionName "0.01"')
+          p.write_text(text)
           PY
-
-      - name: Sync Capacitor
+      - name: Sync native plugins
         working-directory: frontend
         run: npx cap sync android
-
-      - name: Build debug APK
+      - name: Build test APK
         working-directory: frontend/android
         run: ./gradlew assembleDebug
-
-      - name: Rename APK
+      - name: Package
         run: |
           mkdir -p output
-          cp frontend/android/app/build/outputs/apk/debug/app-debug.apk output/comfyui_latula-v0.3.0-debug.apk
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          cp frontend/android/app/build/outputs/apk/debug/app-debug.apk output/latula-v0.01-test.apk
+          sha256sum output/latula-v0.01-test.apk > output/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
         with:
-          name: comfyui_latula-v0.3.0-debug
-          path: output/comfyui_latula-v0.3.0-debug.apk
+          name: latula-v0.01-test
+          path: output/*
           if-no-files-found: error
+          retention-days: 30

@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm ci
+      - run: npm test
       - run: npm run build
 
   backend-check:
@@ -31,3 +32,27 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python -m compileall app
+
+  ui-protocol:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - name: Run isolated protocol and UI checks
+        run: |
+          python tests/protocol-server.py > /tmp/latula-fixture.log 2>&1 &
+          node tests/ui-check.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: latula-ui-checks
+          path: frontend/test-results/
+          if-no-files-found: ignore

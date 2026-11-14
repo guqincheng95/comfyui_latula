@@ -1,0 +1,46 @@
+# Local protocol fixture. No model, GPU, billing, or real AI output.
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+import json, time
+ROOT=Path(__file__).resolve().parent.parent
+GRAPH=json.loads((ROOT/'tests/fixtures/basic-api.json').read_text())
+JOBS={}
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self,*a,**kw):super().__init__(*a,directory=str(ROOT/'dist'),**kw)
+    def end_headers(self):
+        self.send_header('Access-Control-Allow-Origin','http://127.0.0.1:5173')
+        self.send_header('Access-Control-Allow-Headers','Content-Type')
+        super().end_headers()
+    def out(self,value,code=200):
+        data=json.dumps(value,ensure_ascii=False).encode();self.send_response(code);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+    def do_OPTIONS(self):self.send_response(204);self.end_headers()
+    def do_GET(self):
+        p=self.path
+        if p=='/mock/system_stats':return self.out({'system':{'os':'protocol-fixture'}})
+        if p=='/mock/object_info':
+            data={node['class_type']:{'input':{'required':{}}} for node in GRAPH.values()}
+            data['KSampler']['input']['required']={'seed':['INT',{'min':0,'max':4294967295}],'steps':['INT',{'min':1,'max':100}],'sampler_name':[['euler','dpmpp_2m']],'scheduler':[['normal','karras']]}
+            return self.out(data)
+        if p.startswith('/mock/history/'):
+            key=p.rsplit('/',1)[1];job=JOBS.get(key)
+            if not job:return self.out({})
+            if time.time()-job['created']<3:return self.out({})
+            return self.out({key:{'status':{'completed':True,'status_str':'success'},'outputs':{'10':{'images':[{'filename':'protocol-check.svg','subfolder':'','type':'output'}]}}}})
+        if p=='/mock/queue':return self.out({'queue_running':[[0,key] for key,job in JOBS.items() if time.time()-job['created']<3],'queue_pending':[]})
+        if p.startswith('/mock/view?'):
+            data=b'<svg xmlns="http://www.w3.org/2000/svg" width="512" height="768"><rect width="512" height="768" fill="#17202c"/><rect x="30" y="30" width="452" height="708" fill="#39291d" stroke="#e9b861" stroke-width="4"/><text x="256" y="350" text-anchor="middle" fill="#e9b861" font-size="28">API PROTOCOL TEST</text><text x="256" y="400" text-anchor="middle" fill="#fff" font-size="18">Not an AI-generated image</text></svg>'
+            self.send_response(200);self.send_header('Content-Type','image/svg+xml');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
+        if p=='/test-fixture.json':
+            data=(ROOT/'tests/fixtures/basic-api.json').read_bytes();self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(data);return
+        if p=='/test-captured':return self.out(JOBS)
+        return super().do_GET()
+    def do_POST(self):
+        body=self.rfile.read(int(self.headers.get('Content-Length',0)))
+        if self.path=='/mock/upload/image':return self.out({'name':'uploaded-reference.png','subfolder':'latula','type':'input'})
+        if self.path=='/mock/prompt':
+            payload=json.loads(body);key='protocol-'+str(len(JOBS)+1)
+            JOBS[key]={'created':time.time(),'request':payload}
+            return self.out({'prompt_id':key,'number':0,'node_errors':{}})
+        if self.path=='/mock/queue':return self.out({})
+        return self.out({'error':'unknown'},404)
+ThreadingHTTPServer(('0.0.0.0',5173),Handler).serve_forever()

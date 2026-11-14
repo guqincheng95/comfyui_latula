@@ -1,869 +1,372 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { Capacitor } from '@capacitor/core'
+import { App as NativeApp } from '@capacitor/app'
+import { Haptics, ImpactStyle } from '@capacitor/haptics'
+import GameIcon from './components/GameIcon.vue'
+import WorkflowField from './components/WorkflowField.vue'
+import TaskThumb from './components/TaskThumb.vue'
+import { assembleWorkflow, copy, defaults, DISPLAY_VERSION, normalizeAddress, parseWorkflow, STATUS, TERMINAL, uid, validateValues } from './lib/workflow'
+import { loadConfig, saveConfig, loadTasks, saveTask, removeTask, clearThumbs } from './lib/storage'
+import { checkConnection, submitTask, queryTask, cancelTask } from './lib/api'
+import { downloadOutput, clearNativeCache } from './lib/media'
 
-const savedBackend = localStorage.getItem('actTwoBackendUrl') || import.meta.env.VITE_API_BASE_URL || ''
-const backendUrl = ref(savedBackend)
-const backendDraft = ref(savedBackend)
-const settingsOpen = ref(!savedBackend)
-const backendState = ref(savedBackend ? '未检测' : '未设置')
-const backendChecking = ref(false)
-const directUploadSupported = ref(false)
-const characterVideoSupported = ref(false)
-
-const characterFile = ref(null)
-const characterPreview = ref('')
-const characterType = ref('image')
-const characterVideoEl = ref(null)
-const characterWidth = ref(0)
-const characterHeight = ref(0)
-const characterDuration = ref(0)
-const referenceFile = ref(null)
-const referencePreview = ref('')
-const referenceVideoEl = ref(null)
-const referenceDuration = ref(0)
-const referenceLoadState = ref('idle')
-const referenceLoadMessage = ref('')
-
-const expressionIntensity = ref(3)
-const bodyControl = ref(true)
-const ratio = ref('720:1280')
-const seed = ref('')
-
-const taskId = ref('')
-const taskStatus = ref('IDLE')
-const taskDetail = ref('')
-const resultUrl = ref('')
-const resultSectionEl = ref(null)
-const submitting = ref(false)
-const uploadPercent = ref(0)
-const uploadLoadedBytes = ref(0)
-const uploadTotalBytes = ref(0)
-const lastRequestDebug = ref(null)
-let pollTimer = null
-const TASK_STORAGE_KEY = 'actTwoActiveTask'
-
-const terminalStatuses = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'CANCELLED'])
-
-const apiBase = computed(() => backendUrl.value.replace(/\/+$/, ''))
-const statusLabel = computed(() => {
-  const map = {
-    IDLE: '等待素材',
-    UPLOADING: '上传素材',
-    DIRECT_UPLOADING: '直传 Runway',
-    FORWARDING: '云端转存',
-    SUBMITTED: '已提交',
-    PENDING: '排队中',
-    THROTTLED: '排队中',
-    RUNNING: '生成中',
-    SUCCEEDED: '生成完成',
-    FAILED: '生成失败',
-    CANCELED: '已取消',
-    CANCELLED: '已取消',
-  }
-  return map[taskStatus.value] || taskStatus.value
+const loaded = ref(false), fatal = ref('')
+const page = ref('home'), toast = ref(''), storageError = ref('')
+const config = reactive({ workflows: [], activeId: '', drafts: {}, settings: { reducedMotion: false, haptics: true } })
+const tasks = ref([]), draft = ref(null), importing = ref(false), testing = ref(false), busy = ref(false), advanced = ref(false)
+const values = reactive({}), files = reactive({})
+const selectedTaskId = ref(''), filter = ref('all'), favoriteOnly = ref(false), workflowFilter = ref('')
+const downloadKey = ref(''), downloadProgress = ref(null), outputErrors = reactive({})
+const exitOpen = ref(false), confirmRemove = ref(null)
+const reload = () => window.location.reload()
+const characterMode = ref('image')
+const types = ['textarea','image','video','audio','number','select','toggle','text']
+let toastTimer, saveTimer, pollTimer, polling = false, backListener, stateListener, restoreSuppressed = false
+const active = computed(() => config.workflows.find(workflow => workflow.id === config.activeId))
+const activeCount = computed(() => tasks.value.filter(task => task.remoteId && !TERMINAL.has(task.status)).length)
+const latestTask = computed(() => tasks.value.find(task => task.workflow.id === active.value?.id))
+const selectedTask = computed(() => tasks.value.find(task => task.id === selectedTaskId.value))
+const mainFields = computed(() => (active.value?.fields || []).filter(field => !field.advanced && field.enabled !== false).map(field => active.value?.provider === 'runway' && field.id === 'character' ? { ...field, kind: characterMode.value } : field))
+const extraFields = computed(() => (active.value?.fields || []).filter(field => field.advanced && field.enabled !== false))
+const pageTitle = computed(() => ({ assemble: '装配工作流', workbench: active.value?.name || '工作流工坊', history: selectedTask.value ? '作品详情' : '历史图鉴', settings: '旅途设置', about: '关于拉图', updates: '更新手札' })[page.value])
+const filteredTasks = computed(() => tasks.value.filter(task => {
+  if (favoriteOnly.value && !task.favorite) return false
+  if (workflowFilter.value && task.workflow.id !== workflowFilter.value) return false
+  if (filter.value === 'active') return !TERMINAL.has(task.status)
+  if (filter.value === 'failed') return ['FAILED','REVIEW','INTERRUPTED'].includes(task.status)
+  if (filter.value === 'image' || filter.value === 'video') return task.outputs?.some(output => output.kind === filter.value)
+  return true
+}))
+const historyWorkflows = computed(() => [...new Map(tasks.value.map(task => [task.workflow.id, task.workflow.name])).entries()])
+const cachedSummary = computed(() => tasks.value.length + ' 条任务记录 · ' + tasks.value.reduce((sum, task) => sum + (task.outputs?.length || 0), 0) + ' 个结果')
+const runwayFields = [
+  { id: 'character', name: 'character', label: '角色素材', kind: 'image', default: '', nodeTitle: '角色图片；视频需后端支持' },
+  { id: 'reference', name: 'reference', label: '动作参考视频', kind: 'video', default: '', nodeTitle: '单人、无切镜，动作清楚' },
+  { id: 'expression', name: 'expression', label: '表情强度', kind: 'number', min: 1, max: 5, step: 1, default: 3 },
+  { id: 'ratio', name: 'ratio', label: '输出比例', kind: 'select', options: ['720:1280','1280:720','960:960','832:1104','1104:832','1584:672'], default: '720:1280' },
+  { id: 'body', name: 'body', label: '肢体动作迁移', kind: 'toggle', default: true },
+  { id: 'seed', name: 'seed', label: '固定种子（可留空）', kind: 'text', default: '', advanced: true },
+]
+function notify(message) { toast.value = message; clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.value = '', 4500) }
+function tap() { if (config.settings.haptics && Capacitor.isNativePlatform()) Haptics.impact({ style: ImpactStyle.Light }).catch(() => {}) }
+async function persist() {
+  try { await saveConfig(copy(config)); storageError.value = '' } catch (error) { storageError.value = error.message || '本地保存失败，请勿清除应用数据' }
+}
+function deferredSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 300) }
+function go(target) {
+  tap()
+  if (target === 'workbench' && !active.value) { notify('先装配一个工作流，再开始创作'); target = 'assemble' }
+  page.value = target; selectedTaskId.value = ''; draft.value = null
+  location.hash = target
+  nextTick(() => document.querySelector('.page-body')?.scrollTo({ top: 0 }))
+}
+function back() {
+  if (exitOpen.value) { exitOpen.value = false; return }
+  if (confirmRemove.value) { confirmRemove.value = null; return }
+  if (selectedTaskId.value) { selectedTaskId.value = ''; return }
+  if (draft.value) { draft.value = null; return }
+  if (page.value !== 'home') go('home')
+  else exitOpen.value = true
+}
+function newWorkflow(provider = 'comfy') {
+  draft.value = { id: uid(), name: provider === 'comfy' ? '我的 ComfyUI 工作流' : 'Runway 动作迁移', provider, address: provider === 'runway' ? localStorage.getItem('actTwoBackendUrl') || '' : '', fields: provider === 'runway' ? copy(runwayFields) : [], graph: null, warnings: [], missing: [], connection: 'unchecked', updatedAt: Date.now() }
+  tap()
+}
+function edit(workflow) { draft.value = copy(workflow); tap() }
+async function importGraph(event) {
+  const file = event.target.files?.[0]
+  if (!file || !draft.value) return
+  importing.value = true
+  try {
+    if (file.size > 4 * 1024 * 1024) throw new Error('工作流 JSON 超过 4 MB')
+    draft.value.graph = parseWorkflow(await file.text())
+    const assembled = assembleWorkflow(draft.value.graph)
+    Object.assign(draft.value, assembled, { connection: 'unchecked', name: file.name.replace(/\.json$/i, '') })
+    notify('已识别 ' + assembled.nodeCount + ' 个节点，装配 ' + assembled.fields.length + ' 个输入字段')
+  } catch (error) { notify(error.message) } finally { importing.value = false; event.target.value = '' }
+}
+async function test(workflow) {
+  testing.value = true
+  try {
+    workflow.address = normalizeAddress(workflow.address)
+    const result = await checkConnection(workflow)
+    if (workflow.provider === 'comfy' && workflow.graph) {
+      const assembled = assembleWorkflow(workflow.graph, result.objectInfo)
+      const previous = new Map(workflow.fields.map(field => [field.id, field]))
+      assembled.fields = assembled.fields.map(field => { const saved = previous.get(field.id); return saved ? { ...field, label: saved.label, enabled: saved.enabled, advanced: saved.advanced, kind: saved.customKind ? saved.kind : field.kind, customKind: saved.customKind } : field })
+      Object.assign(workflow, assembled)
+      if (assembled.missing.length) throw new Error('服务已连通，但缺少工作流节点：' + assembled.missing.join('、'))
+    }
+    workflow.connection = 'ready'; workflow.checkedAddress = workflow.address
+    if (workflow.provider === 'runway') workflow.characterVideo = result.health?.characterVideo === 'enabled'
+    notify(result.note + '，节点字段已更新')
+  } catch (error) { workflow.connection = 'offline'; notify(error.message) }
+  finally { testing.value = false; if (!draft.value) await persist() }
+}
+async function saveWorkflow(equip = true) {
+  try {
+    const workflow = draft.value
+    workflow.address = normalizeAddress(workflow.address)
+    if (!workflow.name.trim()) throw new Error('请输入工作流名称')
+    if (workflow.provider === 'comfy' && !workflow.graph) throw new Error('请先导入 API 格式工作流')
+    if (workflow.address !== workflow.checkedAddress) workflow.connection = 'unchecked'
+    workflow.updatedAt = Date.now()
+    const index = config.workflows.findIndex(item => item.id === workflow.id)
+    if (index < 0) config.workflows.push(copy(workflow))
+    else config.workflows.splice(index, 1, copy(workflow))
+    if (equip) config.activeId = workflow.id
+    await persist(); draft.value = null
+    notify(equip ? '工作流已装配' : '配置已保存')
+    if (equip) go('home')
+  } catch (error) { notify(error.message) }
+}
+async function equip(workflow) { config.activeId = workflow.id; await persist(); tap(); notify('已装配「' + workflow.name + '」') }
+async function duplicate(workflow) { draft.value = { ...copy(workflow), id: uid(), name: workflow.name + ' · 副本' } }
+async function deleteWorkflow(workflow) {
+  config.workflows = config.workflows.filter(item => item.id !== workflow.id)
+  if (config.activeId === workflow.id) config.activeId = ''
+  delete config.drafts[workflow.id]
+  await persist(); confirmRemove.value = null; notify('已移除本地配置，历史任务仍保留')
+}
+watch(() => config.activeId + ':' + (active.value?.updatedAt || ''), () => {
+  restoreSuppressed = true
+  Object.keys(values).forEach(key => delete values[key])
+  Object.keys(files).forEach(key => delete files[key])
+  if (active.value) Object.assign(values, defaults(active.value.fields), config.drafts[active.value.id] || {})
+  nextTick(() => restoreSuppressed = false)
 })
-
-const canGenerate = computed(
-  () =>
-    characterFile.value &&
-    referenceFile.value &&
-    apiBase.value &&
-    !submitting.value &&
-    (characterType.value === 'image' || characterVideoSupported.value)
-)
-
-function normalizeBackend(value) {
-  const trimmed = value.trim()
-  if (!trimmed) return ''
-  if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, '')
-  return `http://${trimmed.replace(/\/+$/, '')}`
+watch(values, () => {
+  if (!loaded.value || restoreSuppressed || !active.value) return
+  config.drafts[active.value.id] = copy(values); deferredSave()
+}, { deep: true })
+function chooseFile(field, file) {
+  if (file && file.size > 200 * 1024 * 1024) { notify('0.01 单个素材暂限 200 MB'); return }
+  files[field.id] = file
 }
-
-function saveBackend() {
-  const normalized = normalizeBackend(backendDraft.value)
-  const previousUrl = backendUrl.value
-
-  backendUrl.value = normalized
-  backendDraft.value = normalized
-
-  if (normalized) {
-    localStorage.setItem('actTwoBackendUrl', normalized)
-
-    if (normalized !== previousUrl || !backendState.value.startsWith('已连接')) {
-      backendState.value = '未检测'
-    }
-  } else {
-    localStorage.removeItem('actTwoBackendUrl')
-    backendState.value = '未设置'
-  }
-
-  settingsOpen.value = false
+async function patch(task, change) {
+  Object.assign(task, change, { updatedAt: Date.now() })
+  try { await saveTask(copy(task)) } catch { storageError.value = '任务记录未能保存，请检查设备存储空间并保留服务端任务编号。' }
 }
-
-async function testBackend() {
-  const candidate = normalizeBackend(backendDraft.value || backendUrl.value)
-  if (!candidate) {
-    backendState.value = '未设置'
-    settingsOpen.value = true
-    return
-  }
-
-  backendChecking.value = true
-  backendState.value = '检测中'
-  try {
-    const response = await fetch(`${candidate}/health`, { cache: 'no-store' })
-    const payload = await response.json()
-    if (!response.ok || payload.status !== 'ok') throw new Error('health check failed')
-    backendState.value = `已连接 · v${payload.version || '?'}`
-    directUploadSupported.value = payload.directUpload === 'enabled'
-    characterVideoSupported.value = payload.characterVideo === 'enabled'
-    backendDraft.value = candidate
-    backendUrl.value = candidate
-    localStorage.setItem('actTwoBackendUrl', candidate)
-  } catch {
-    directUploadSupported.value = false
-    characterVideoSupported.value = false
-    backendState.value = '连接失败'
-  } finally {
-    backendChecking.value = false
-  }
-}
-
-function setPreview(kind, file) {
-  if (!file) return
-  if (kind === 'character') {
-    if (characterPreview.value) URL.revokeObjectURL(characterPreview.value)
-    characterFile.value = file
-    characterPreview.value = URL.createObjectURL(file)
-    characterType.value = file.type?.startsWith('video/') ? 'video' : 'image'
-    characterWidth.value = 0
-    characterHeight.value = 0
-    characterDuration.value = 0
-    if (characterType.value === 'video') bodyControl.value = false
-  } else {
-    if (referencePreview.value) URL.revokeObjectURL(referencePreview.value)
-    referenceFile.value = file
-    referencePreview.value = URL.createObjectURL(file)
-    referenceDuration.value = 0
-    referenceLoadState.value = 'loading'
-    referenceLoadMessage.value = '文件已选择，正在读取视频信息…'
-  }
-}
-
-function onCharacterChange(event) {
-  setPreview('character', event.target.files?.[0])
-}
-
-function chooseCharacterType(type) {
-  if (type === 'video' && !characterVideoSupported.value) return
-  characterType.value = type
-  characterFile.value = null
-  if (characterPreview.value) URL.revokeObjectURL(characterPreview.value)
-  characterPreview.value = ''
-  characterWidth.value = 0
-  characterHeight.value = 0
-  characterDuration.value = 0
-  if (type === 'video') bodyControl.value = false
-}
-
-function onCharacterImageLoad(event) {
-  characterWidth.value = event.target.naturalWidth || 0
-  characterHeight.value = event.target.naturalHeight || 0
-}
-
-function onCharacterVideoMetadata(event) {
-  characterWidth.value = event.target.videoWidth || 0
-  characterHeight.value = event.target.videoHeight || 0
-  characterDuration.value = event.target.duration || 0
-  event.target.muted = true
-  event.target.loop = true
-  event.target.play().catch(() => {})
-}
-
-function toggleCharacterPlayback() {
-  const video = characterVideoEl.value
-  if (!video) return
-  if (video.paused) video.play().catch(() => {})
-  else video.pause()
-}
-
-function onReferenceChange(event) {
-  setPreview('reference', event.target.files?.[0])
-}
-
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB'
-  const mb = bytes / 1024 / 1024
-  return mb >= 100 ? `${mb.toFixed(0)} MB` : `${mb.toFixed(1)} MB`
-}
-
-function formatDuration(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '--:--'
-  const mins = Math.floor(seconds / 60)
-  const secs = Math.floor(seconds % 60)
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
-}
-
-function onReferenceLoadedMetadata(event) {
-  referenceDuration.value = event.target.duration || 0
-  referenceLoadState.value = 'ready'
-  referenceLoadMessage.value = '视频已就绪，可直接预览和提交'
-}
-
-function onReferenceCanPlay() {
-  referenceLoadState.value = 'ready'
-  referenceLoadMessage.value = '视频已就绪，可直接预览和提交'
-  const video = referenceVideoEl.value
-  if (video) {
-    video.muted = true
-    video.loop = true
-    video.play().catch(() => {})
-  }
-}
-
-function onReferenceError() {
-  referenceLoadState.value = 'preview-error'
-  referenceLoadMessage.value = '当前视频编码无法在内置播放器中预览，但文件仍可继续上传生成'
-}
-
-function toggleReferencePlayback() {
-  const video = referenceVideoEl.value
-  if (!video) return
-
-  if (video.paused) {
-    video.play().catch(() => {
-      referenceLoadState.value = 'preview-error'
-      referenceLoadMessage.value = '当前视频无法在内置播放器中播放，但文件仍可继续上传生成'
-    })
-  } else {
-    video.pause()
-  }
-}
-
-function persistTask() {
-  if (!taskId.value) return
-  localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify({
-    id: taskId.value,
-    status: taskStatus.value,
-    detail: taskDetail.value,
-    resultUrl: resultUrl.value,
-    backendUrl: apiBase.value,
-    updatedAt: Date.now(),
-  }))
-}
-
-function clearPersistedTask() {
-  localStorage.removeItem(TASK_STORAGE_KEY)
-}
-
-function restorePersistedTask() {
-  try {
-    const raw = localStorage.getItem(TASK_STORAGE_KEY)
-    if (!raw) return false
-    const saved = JSON.parse(raw)
-    if (!saved?.id) return false
-
-    taskId.value = saved.id
-    taskStatus.value = saved.status || 'SUBMITTED'
-    taskDetail.value = saved.detail || '正在恢复后台任务…'
-    resultUrl.value = saved.resultUrl || ''
-
-    if (saved.backendUrl && !backendUrl.value) {
-      backendUrl.value = saved.backendUrl
-      backendDraft.value = saved.backendUrl
-    }
-    return true
-  } catch {
-    clearPersistedTask()
-    return false
-  }
-}
-
-function resetResult() {
-  taskId.value = ''
-  taskStatus.value = 'IDLE'
-  taskDetail.value = ''
-  resultUrl.value = ''
-  uploadPercent.value = 0
-  uploadLoadedBytes.value = 0
-  uploadTotalBytes.value = 0
-  lastRequestDebug.value = null
-  if (pollTimer) {
-    clearTimeout(pollTimer)
-    pollTimer = null
-  }
-}
-
-async function initRunwayUpload(file) {
-  const response = await fetch(`${apiBase.value}/api/uploads/init`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename: file.name || 'upload.bin' }),
-  })
-  const payload = await response.json()
-  if (!response.ok) throw new Error(payload.detail || '无法申请 Runway 上传地址')
-  return payload
-}
-
-function uploadToPresignedSlot(slot, file, baseLoaded, totalBytes) {
-  return new Promise((resolve, reject) => {
-    const body = new FormData()
-    Object.entries(slot.fields || {}).forEach(([key, value]) => body.append(key, value))
-    body.append('file', file)
-
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', slot.uploadUrl)
-    xhr.timeout = 15 * 60 * 1000
-
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return
-      const loaded = Math.min(totalBytes, baseLoaded + event.loaded)
-      uploadLoadedBytes.value = loaded
-      uploadTotalBytes.value = totalBytes
-      uploadPercent.value = Math.min(100, Math.round((loaded / totalBytes) * 100))
-      taskStatus.value = 'DIRECT_UPLOADING'
-      taskDetail.value = `手机 → Runway：${uploadPercent.value}% · ${formatBytes(loaded)} / ${formatBytes(totalBytes)}`
-    }
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(slot.runwayUri)
-      else reject(new Error(`Runway 素材上传失败（HTTP ${xhr.status}）`))
-    }
-    xhr.onerror = () => reject(new Error('手机直传 Runway 失败'))
-    xhr.ontimeout = () => reject(new Error('手机直传 Runway 超时'))
-    xhr.send(body)
-  })
-}
-
-async function submitDirectTask() {
-  const totalBytes = characterFile.value.size + referenceFile.value.size
-  uploadLoadedBytes.value = 0
-  uploadTotalBytes.value = totalBytes
-  uploadPercent.value = 0
-  taskStatus.value = 'DIRECT_UPLOADING'
-  taskDetail.value = '正在申请 Runway 临时上传地址…'
-
-  const characterSlot = await initRunwayUpload(characterFile.value)
-  const characterUri = await uploadToPresignedSlot(characterSlot, characterFile.value, 0, totalBytes)
-
-  taskDetail.value = '角色图已上传，正在上传动作视频…'
-  const referenceSlot = await initRunwayUpload(referenceFile.value)
-  const referenceUri = await uploadToPresignedSlot(
-    referenceSlot,
-    referenceFile.value,
-    characterFile.value.size,
-    totalBytes
-  )
-
-  uploadPercent.value = 100
-  uploadLoadedBytes.value = totalBytes
-  taskStatus.value = 'SUBMITTED'
-  taskDetail.value = '素材直传完成，正在创建 Act-Two 任务…'
-
-  const body = {
-    character_uri: characterUri,
-    reference_uri: referenceUri,
-    character_type: characterType.value,
-    expression_intensity: expressionIntensity.value,
-    body_control: characterType.value === 'image' ? bodyControl.value : false,
-    ratio: ratio.value,
-  }
-  if (seed.value.trim()) body.seed = Number(seed.value.trim())
-
-  const response = await fetch(`${apiBase.value}/api/tasks/direct`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const payload = await response.json()
-  if (!response.ok) throw new Error(payload.detail || 'Runway 任务创建失败')
-  return payload
-}
-
-async function submitRelayTask() {
-  const form = new FormData()
-  if (characterVideoSupported.value) {
-    form.append('character_file', characterFile.value)
-    form.append('character_type', characterType.value)
-  } else {
-    form.append('character_image', characterFile.value)
-  }
-  form.append('reference_video', referenceFile.value)
-  form.append('expression_intensity', String(expressionIntensity.value))
-  form.append('body_control', String(characterType.value === 'image' ? bodyControl.value : false))
-  form.append('ratio', ratio.value)
-  if (seed.value.trim()) form.append('seed', seed.value.trim())
-
-  return await new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', `${apiBase.value}/api/tasks`)
-    xhr.responseType = 'json'
-    xhr.timeout = 15 * 60 * 1000
-
-    xhr.upload.onloadstart = () => {
-      uploadPercent.value = 0
-      taskStatus.value = 'UPLOADING'
-      taskDetail.value = '兼容模式：正在上传到阿里云…'
-    }
-
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return
-      uploadLoadedBytes.value = event.loaded
-      uploadTotalBytes.value = event.total
-      uploadPercent.value = Math.min(100, Math.round((event.loaded / event.total) * 100))
-      taskStatus.value = 'UPLOADING'
-      taskDetail.value = `手机 → 阿里云：${uploadPercent.value}% · ${formatBytes(event.loaded)} / ${formatBytes(event.total)}`
-    }
-
-    xhr.upload.onload = () => {
-      uploadPercent.value = 100
-      taskStatus.value = 'FORWARDING'
-      taskDetail.value = '手机上传完成，阿里云正在转存素材到 Runway…'
-    }
-
-    xhr.onload = () => {
-      const response = xhr.response || {}
-      if (xhr.status >= 200 && xhr.status < 300) resolve(response)
-      else reject(new Error(response.detail || `提交失败（HTTP ${xhr.status}）`))
-    }
-
-    xhr.onerror = () => reject(new Error('网络连接失败，请检查本地网络或云服务器'))
-    xhr.ontimeout = () => reject(new Error('上传超时，请检查视频大小和网络状态'))
-    xhr.onabort = () => reject(new Error('上传已取消'))
-    xhr.send(form)
-  })
-}
-
 async function generate() {
-  if (!apiBase.value) {
-    settingsOpen.value = true
-    return
-  }
-  if (!canGenerate.value) return
-
-  resetResult()
-  submitting.value = true
-  taskStatus.value = directUploadSupported.value ? 'DIRECT_UPLOADING' : 'UPLOADING'
-  taskDetail.value = directUploadSupported.value
-    ? '准备直传 Runway…'
-    : '准备兼容上传…'
-
-  requestAnimationFrame(() => {
-    resultSectionEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  })
-
+  if (busy.value || !active.value) return
+  let task, phase = ''
   try {
-    let payload
-
-    if (directUploadSupported.value) {
-      try {
-        payload = await submitDirectTask()
-      } catch (directError) {
-        taskDetail.value = `直传失败，自动切换兼容中转：${directError.message || '未知错误'}`
-        payload = await submitRelayTask()
-      }
-    } else {
-      payload = await submitRelayTask()
+    const workflow = copy(active.value), input = copy(values), selectedFiles = { ...files }
+    workflow.address = normalizeAddress(workflow.address)
+    validateValues(workflow.fields.filter(field => field.enabled !== false), input, selectedFiles)
+    if (workflow.provider === 'runway' && (!selectedFiles.character || !selectedFiles.reference)) throw new Error('请重新选择角色素材和动作视频')
+    busy.value = true
+    notify('正在检查服务连接…')
+    const connection = await checkConnection(workflow)
+    if (workflow.provider === 'comfy') {
+      const assembled = assembleWorkflow(workflow.graph, connection.objectInfo)
+      if (assembled.missing.length) throw new Error('服务缺少节点：' + assembled.missing.join('、'))
+      // Keep user labels/kinds but apply authoritative numerical limits/options.
+      workflow.fields = workflow.fields.map(field => ({ ...field, ...Object.fromEntries(Object.entries(assembled.fields.find(item => item.id === field.id) || {}).filter(([key]) => ['min','max','step','options'].includes(key))) }))
+      validateValues(workflow.fields, input, selectedFiles)
     }
-
-    taskId.value = payload.id
-    lastRequestDebug.value = payload.debug || {
-      model: 'act_two',
-      character_type: characterType.value,
-      reference_type: 'video',
-      expression_intensity: expressionIntensity.value,
-      body_control: characterType.value === 'image' ? bodyControl.value : false,
-      ratio: ratio.value,
-      seed: seed.value.trim() || null,
-    }
-    taskStatus.value = 'SUBMITTED'
-    taskDetail.value = 'Runway 已接收任务，可切到后台继续等待'
-    persistTask()
-    schedulePoll(1200)
+    task = reactive({ id: uid(), remoteId: '', workflow, values: input, fileNames: Object.fromEntries(Object.entries(selectedFiles).filter(([,file]) => file).map(([id,file]) => [id,file.name])), status: 'UPLOADING', detail: '准备素材', outputs: [], favorite: false, createdAt: Date.now(), updatedAt: Date.now(), progress: null })
+    await saveTask(copy(task)); tasks.value.unshift(task)
+    const submitted = await submitTask(workflow, input, selectedFiles, update => { phase = update.status || phase; patch(task, update) })
+    await patch(task, { remoteId: submitted.remoteId, values: submitted.values, status: 'SUBMITTED', detail: submitted.detail, progress: null })
+    notify('任务已提交，可以在历史图鉴查看')
+    pollAll()
   } catch (error) {
-    taskStatus.value = 'FAILED'
-    taskDetail.value = error.message || '提交失败'
-  } finally {
-    submitting.value = false
-  }
+    if (task) await patch(task, { status: phase === 'SUBMITTING' ? 'REVIEW' : 'FAILED', detail: error.message + (phase === 'SUBMITTING' ? '。请先核对服务端队列，不会自动重试提交。' : ''), progress: null })
+    notify(error.message)
+  } finally { busy.value = false }
 }
-
-function schedulePoll(delay = 5200) {
-  if (pollTimer) clearTimeout(pollTimer)
-  pollTimer = setTimeout(pollTask, delay)
+async function refreshTask(task) {
+  if (!task.remoteId) { notify(task.detail || '尚无服务端任务编号，请核对服务端后手动处理'); return }
+  try { await patch(task, await queryTask(copy(task))) }
+  catch (error) { await patch(task, { detail: '查询暂时失败：' + error.message }) }
 }
-
-async function pollTask() {
-  if (!taskId.value) return
+async function pollAll() {
+  clearTimeout(pollTimer)
+  if (polling || document.hidden || !loaded.value) return
+  polling = true
+  try { await Promise.allSettled(tasks.value.filter(task => task.remoteId && !TERMINAL.has(task.status)).map(refreshTask)) }
+  finally { polling = false; if (!document.hidden) pollTimer = setTimeout(pollAll, 7000) }
+}
+async function cancel(task) { try { await cancelTask(copy(task)); await patch(task, { status: 'CANCELED', detail: '已从服务端待执行队列移除' }); notify('排队任务已移除') } catch (error) { notify(error.message) } }
+async function favorite(task) { await patch(task, { favorite: !task.favorite }); tap() }
+function openTask(task) { page.value = 'history'; selectedTaskId.value = task.id; tap() }
+async function reuse(task) {
+  let workflow = config.workflows.find(item => item.id === task.workflow.id)
+  if (!workflow) { workflow = copy(task.workflow); config.workflows.push(workflow) }
+  config.activeId = workflow.id
+  config.drafts[workflow.id] = copy(task.values)
+  await persist()
+  Object.keys(values).forEach(key => delete values[key]); Object.assign(values, defaults(workflow.fields), task.values)
+  Object.keys(files).forEach(key => delete files[key])
+  go('workbench')
+  notify('已带回参数。请核对素材后手动提交，不会自动生成。')
+}
+async function removeRecord(task) {
+  await removeTask(task.id); tasks.value = tasks.value.filter(item => item.id !== task.id)
+  selectedTaskId.value = ''; confirmRemove.value = null; notify('已移除这条本地记录，远端结果未删除')
+}
+async function saveOutput(task, output) {
+  downloadKey.value = task.id + output.id; downloadProgress.value = null
+  try { await downloadOutput(output, progress => downloadProgress.value = progress); notify(Capacitor.isNativePlatform() ? '原文件已准备，请在系统面板选择保存或分享' : '已发起原文件下载') }
+  catch (error) { notify(error.message) } finally { downloadKey.value = '' }
+}
+async function useAsInput(task, output) {
+  const workflow = active.value
+  if (!workflow) return notify('请先装配一个工作流')
+  const field = workflow.fields.find(item => item.kind === output.kind)
+  if (!field) return notify('当前工作流没有对应的素材输入模块')
   try {
-    const response = await fetch(`${apiBase.value}/api/tasks/${taskId.value}`)
-    const payload = await response.json()
-    if (!response.ok) throw new Error(payload.detail || '状态查询失败')
-
-    taskStatus.value = payload.status || 'UNKNOWN'
-    taskDetail.value =
-      payload.failure ||
-      payload.failureCode ||
-      (taskStatus.value === 'SUCCEEDED' ? '结果已就绪' : 'Runway 正在处理')
-
-    if (taskStatus.value === 'SUCCEEDED') {
-      const output = Array.isArray(payload.output) ? payload.output : []
-      resultUrl.value = output[0] || ''
-      taskDetail.value = resultUrl.value ? '生成完成，视频已经返回' : '任务完成，但暂未收到视频地址'
-      persistTask()
-      requestAnimationFrame(() => {
-        resultSectionEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
-    } else {
-      persistTask()
-    }
-
-    if (!terminalStatuses.has(taskStatus.value)) {
-      schedulePoll(5200 + Math.floor(Math.random() * 900))
-    }
-  } catch (error) {
-    taskDetail.value = error.message || '状态查询暂时失败'
-    persistTask()
-    schedulePoll(8000)
-  }
+    notify('正在读取原文件…')
+    const response = await fetch(output.url)
+    if (!response.ok) throw new Error('原文件暂不可用')
+    const blob = await response.blob()
+    const file = new File([blob], output.filename || 'result', { type: blob.type || (output.kind === 'video' ? 'video/mp4' : 'image/png') })
+    go('workbench'); chooseFile(field, file); notify('已带入素材，提交时会上传到当前服务')
+  } catch (error) { notify(error.message) }
 }
-
-function randomSeed() {
-  seed.value = String(Math.floor(Math.random() * 4294967295))
+function publicValues(task) {
+  return task.workflow.fields.filter(field => field.enabled !== false).map(field => ({ label: field.label, value: /key|token|password|secret/i.test(field.name) ? '••••••' : (task.values[field.id] ?? field.default) }))
 }
-
-function handleVisibilityChange() {
-  if (document.visibilityState === 'visible' && taskId.value && !terminalStatuses.has(taskStatus.value)) {
-    if (pollTimer) clearTimeout(pollTimer)
-    pollTask()
-  }
+const date = value => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+function connectionLabel(workflow) { return workflow.connection === 'ready' && workflow.checkedAddress === workflow.address ? '已连接' : workflow.connection === 'offline' ? '连接异常' : '待检查' }
+async function clearCache() { await clearThumbs(); await clearNativeCache(); notify('预览与分享缓存已清理，任务记录保留') }
+async function exit() {
+  await persist()
+  if (Capacitor.isNativePlatform()) await NativeApp.minimizeApp()
+  else notify('网页版可关闭此标签页，已接收的任务继续在服务端运行')
+  exitOpen.value = false
 }
-
-onMounted(() => {
-  if (savedBackend) {
-    testBackend()
-  }
-
-  if (restorePersistedTask()) {
-    if (!terminalStatuses.has(taskStatus.value)) {
-      taskDetail.value = '后台任务已恢复，正在同步最新状态…'
-      pollTask()
+function visibility() { if (document.hidden) clearTimeout(pollTimer); else pollAll() }
+onMounted(async () => {
+  try {
+    const saved = await loadConfig()
+    Object.assign(config, saved, { settings: { reducedMotion: false, haptics: true, ...saved.settings } })
+    tasks.value = (await loadTasks()).sort((a,b) => b.createdAt - a.createdAt)
+    // Preserve the previous prototype's active task and backend setting.
+    const legacy = JSON.parse(localStorage.getItem('actTwoActiveTask') || 'null')
+    if (legacy?.id && !tasks.value.some(task => task.remoteId === legacy.id)) {
+      const workflow = { id: 'legacy-runway', name: 'Runway 动作迁移', provider: 'runway', address: legacy.backendUrl || localStorage.getItem('actTwoBackendUrl') || '', fields: copy(runwayFields) }
+      const task = { id: uid(), remoteId: legacy.id, workflow, values: {}, status: legacy.status || 'SUBMITTED', detail: legacy.detail || '原版本任务', outputs: legacy.resultUrl ? [{ id: '0', url: legacy.resultUrl, kind: 'video', filename: 'runway-' + legacy.id + '.mp4' }] : [], createdAt: legacy.updatedAt || Date.now(), updatedAt: Date.now() }
+      tasks.value.unshift(task); await saveTask(task)
     }
-  }
-
-  document.addEventListener('visibilitychange', handleVisibilityChange)
+    for (const task of tasks.value.filter(item => !item.remoteId && ['UPLOADING','SUBMITTING'].includes(item.status))) await patch(task, { status: itemStatus(task), detail: '应用重启前未保存服务端任务编号，请先核对服务端任务。不会自动重复提交。' })
+    loaded.value = true
+    if (active.value) Object.assign(values, defaults(active.value.fields), config.drafts[active.value.id] || {})
+    document.addEventListener('visibilitychange', visibility)
+    if (Capacitor.isNativePlatform()) {
+      backListener = await NativeApp.addListener('backButton', back)
+      stateListener = await NativeApp.addListener('appStateChange', ({ isActive }) => { if (isActive) pollAll(); else clearTimeout(pollTimer) })
+    }
+    pollAll()
+  } catch (error) { fatal.value = error.message || '本地数据加载失败'; loaded.value = true }
 })
-
-onBeforeUnmount(() => {
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
-  if (pollTimer) clearTimeout(pollTimer)
-  if (characterPreview.value) URL.revokeObjectURL(characterPreview.value)
-  if (referencePreview.value) URL.revokeObjectURL(referencePreview.value)
-})
+function itemStatus(task) { return task.status === 'UPLOADING' ? 'INTERRUPTED' : 'REVIEW' }
+onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearTimeout(toastTimer); document.removeEventListener('visibilitychange', visibility); backListener?.remove(); stateListener?.remove() })
 </script>
 
 <template>
-  <main class="app-shell">
-    <section class="hero">
-      <div class="hero-top">
-        <div>
-          <div class="eyebrow">拉图 · RUNWAY ACT-TWO</div>
-          <h1>动作迁移</h1>
-        </div>
-        <button type="button" class="settings-button" @click="settingsOpen = !settingsOpen">后端</button>
-      </div>
-      <p>上传角色与动作参考，提交给 Runway 生成并取回结果。</p>
-      <button type="button" class="backend-chip" @click="settingsOpen = true">
-        <span :class="{ online: backendState.startsWith('已连接') }"></span>
-        {{ backendState }}
-      </button>
-      <span v-if="directUploadSupported" class="direct-mode-badge">DIRECT · 手机直传 Runway</span>
-    </section>
-
-    <section v-if="settingsOpen" class="panel backend-panel">
-      <div class="panel-title">
-        <div>
-          <strong>后端连接</strong>
-          <small>APK 不保存 API Key，只连接你的 FastAPI 后端</small>
-        </div>
-        <button type="button" class="close-button" @click="settingsOpen = false">×</button>
-      </div>
-      <div class="field-group">
-        <label for="backend">后端地址</label>
-        <input
-          id="backend"
-          v-model="backendDraft"
-          inputmode="url"
-          placeholder="例如 192.168.1.8:8000"
-          autocomplete="off"
-        />
-      </div>
-      <div class="backend-actions">
-        <button type="button" class="secondary-button" :disabled="backendChecking" @click="testBackend">
-          {{ backendChecking ? '检测中…' : '测试连接' }}
-        </button>
-        <button type="button" class="primary-small" @click="saveBackend">保存</button>
-      </div>
-      <p class="backend-hint">填写你实际部署的后端地址，可使用局域网或公网服务。</p>
-    </section>
-
-    <section class="panel character-mode-panel">
-      <div class="character-mode-title">
-        <div>
-          <strong>角色来源</strong>
-          <small>Act-Two 官方支持角色图片或角色视频</small>
-        </div>
-        <span>CHARACTER</span>
-      </div>
-      <div class="character-mode-tabs">
-        <button type="button" :class="{ active: characterType === 'image' }" @click="chooseCharacterType('image')">
-          角色图片
-          <small>支持肢体动作迁移</small>
-        </button>
-        <button
-          type="button"
-          :class="{ active: characterType === 'video', unavailable: !characterVideoSupported }"
-          :disabled="!characterVideoSupported"
-          @click="chooseCharacterType('video')"
-        >
-          角色视频
-          <small>{{ characterVideoSupported ? '保留原视频身体/镜头运动' : '需要新版后端 v0.2.1+' }}</small>
-        </button>
-      </div>
-    </section>
-
-    <section class="upload-grid">
-      <div class="upload-card character-upload-card">
-        <label v-if="!characterPreview" class="video-pick-area">
-          <input
-            type="file"
-            :accept="characterType === 'image' ? 'image/*' : 'video/*'"
-            @change="onCharacterChange"
-          />
-          <div class="empty-state">
-            <span class="plus">＋</span>
-            <strong>{{ characterType === 'image' ? '角色参考图' : '角色参考视频' }}</strong>
-            <small>{{ characterType === 'image' ? '建议单人、腰部以内、五官清晰' : '建议单人、无切镜、接近动作视频时长' }}</small>
-          </div>
-        </label>
-
-        <template v-else>
-          <img
-            v-if="characterType === 'image'"
-            :src="characterPreview"
-            alt="角色参考预览"
-            @load="onCharacterImageLoad"
-          />
-          <video
-            v-else
-            ref="characterVideoEl"
-            class="reference-player"
-            :src="characterPreview"
-            autoplay
-            loop
-            muted
-            preload="metadata"
-            playsinline
-            webkit-playsinline
-            @loadedmetadata="onCharacterVideoMetadata"
-            @click="toggleCharacterPlayback"
-          ></video>
-          <div class="file-badge">{{ characterType === 'image' ? '角色图' : '角色视频' }}</div>
-          <div class="asset-meta-badge">
-            {{ characterWidth && characterHeight ? characterWidth + '×' + characterHeight : '读取尺寸…' }}
-            <template v-if="characterType === 'video'"> · {{ formatDuration(characterDuration) }}</template>
-            · {{ formatBytes(characterFile?.size || 0) }}
-          </div>
-          <label class="asset-replace-button">
-            更换
-            <input
-              type="file"
-              :accept="characterType === 'image' ? 'image/*' : 'video/*'"
-              @change="onCharacterChange"
-            />
-          </label>
-        </template>
-      </div>
-
-      <div class="upload-card video-upload-card">
-        <label v-if="!referencePreview" class="video-pick-area">
-          <input type="file" accept="video/*" @change="onReferenceChange" />
-          <div class="empty-state">
-            <span class="plus">＋</span>
-            <strong>动作参考视频</strong>
-            <small>建议 3–30 秒</small>
-          </div>
-        </label>
-
-        <template v-else>
-          <video
-            ref="referenceVideoEl"
-            class="reference-player"
-            :src="referencePreview"
-            autoplay
-            loop
-            muted
-            preload="metadata"
-            playsinline
-            webkit-playsinline
-            @loadedmetadata="onReferenceLoadedMetadata"
-            @canplay="onReferenceCanPlay"
-            @error="onReferenceError"
-            @click="toggleReferencePlayback"
-          ></video>
-
-          <div class="video-overlay-top">
-            <span class="video-ready-dot" :class="referenceLoadState"></span>
-            <span>{{ referenceLoadState === 'ready' ? '已选择' : referenceLoadState === 'preview-error' ? '预览受限' : '读取中' }}</span>
-          </div>
-
-          <div class="video-meta">
-            <div class="video-meta-main">
-              <strong>{{ referenceFile?.name || '动作视频' }}</strong>
-              <small>{{ formatDuration(referenceDuration) }} · {{ formatBytes(referenceFile?.size || 0) }}</small>
-            </div>
-            <label class="replace-video-button">
-              更换
-              <input type="file" accept="video/*" @change="onReferenceChange" />
-            </label>
-          </div>
-
-          <button
-            v-if="referenceLoadState === 'preview-error'"
-            type="button"
-            class="video-fallback-button"
-            @click="toggleReferencePlayback"
-          >
-            尝试播放
+  <div class="latula" :class="{ 'reduce-motion': config.settings.reducedMotion }">
+    <div v-if="!loaded" class="boot"><GameIcon name="cat" :size="50" /><h1>拉图</h1><p>点亮港湾的灯火…</p></div>
+    <div v-else-if="fatal" class="boot"><h1>记录暂未打开</h1><p>{{ fatal }}</p><button class="gold-button" @click="reload">重新打开</button></div>
+    <template v-else>
+      <main v-if="page === 'home'" class="home-shell">
+        <div class="home-stage">
+          <div class="home-art" role="img" aria-label="月夜像素港湾，三个猫咪工坊沿石阶排列，门口有女性像素管理员，前景冒险者走向小屋"></div>
+          <div class="moon-glow"></div>
+          <header class="home-brand"><h1>拉图<span>AI</span></h1><p>ComfyUI · AI Workflow</p><div class="brand-rule">◇</div></header>
+          <div class="home-version">初航测试版 · v{{ DISPLAY_VERSION }}</div>
+          <button class="scene-sign assembly-sign" :class="{ equipped: active }" @click="go('assemble')" aria-label="装配工作流">
+            <span class="sign-title">装配工作流</span><small>{{ active ? active.name : '配置 · 管理 · 切换' }}</small><GameIcon class="sign-arrow" name="chevron" />
           </button>
-        </template>
-      </div>
-    </section>
-
-    <section class="panel input-guide">
-      <div class="input-guide-title">
-        <strong>输入检查</strong>
-        <span>{{ characterType === 'image' ? '图片模式' : '视频模式' }}</span>
-      </div>
-      <div class="guide-grid">
-        <div>✓ 单一主体，脸部清晰可见</div>
-        <div>✓ 最远建议腰部构图</div>
-        <div>✓ 动作视频不要切镜</div>
-        <div>✓ 动作视频起始姿态尽量接近角色素材</div>
-        <div v-if="characterType === 'image'">✓ 需要手势时，双手从第一帧就在画面内</div>
-        <div v-else>✓ 角色视频尽量接近动作视频时长，避免明显回摆循环</div>
-      </div>
-    </section>
-
-    <section class="panel controls">
-      <div class="control-row">
-        <div><span class="label">表情强度</span><small>Expression Intensity</small></div>
-        <div class="stepper">
-          <button type="button" @click="expressionIntensity = Math.max(1, expressionIntensity - 1)">−</button>
-          <strong>{{ expressionIntensity }}</strong>
-          <button type="button" @click="expressionIntensity = Math.min(5, expressionIntensity + 1)">＋</button>
+          <button class="scene-sign enter-sign" @click="go('workbench')" aria-label="进入工作流"><span class="sign-title">进入工作流</span><small>{{ active ? '素材 · 参数 · 提交' : '先装配你的工作流' }}</small><GameIcon class="sign-arrow" name="chevron" /></button>
+          <button class="scene-sign history-sign" @click="go('history')" aria-label="历史任务"><span class="sign-title">历史任务</span><small>{{ activeCount ? activeCount + ' 个任务等待结果' : '记录 · 查看 · 复用' }}</small><GameIcon class="sign-arrow" name="chevron" /><span v-if="activeCount" class="scene-badge">{{ activeCount }}</span></button>
+          <nav class="home-nav" aria-label="辅助功能">
+            <button @click="go('about')"><span><GameIcon name="info" /></span>关于</button><button @click="go('updates')"><span><GameIcon name="update" /></span>更新</button><button @click="go('settings')"><span><GameIcon name="gear" /></span>设置</button><button @click="exitOpen = true"><span><GameIcon name="power" /></span>退出</button>
+          </nav>
         </div>
-      </div>
+      </main>
+      <div v-else class="interior-shell">
+        <header class="page-header"><button class="icon-button" aria-label="返回" @click="back"><GameIcon name="back" /></button><div><small>拉图 · 月夜工坊</small><h1>{{ pageTitle }}</h1></div><button class="icon-button" aria-label="返回主页" @click="go('home')"><GameIcon name="cat" /></button></header>
+        <main class="page-body">
+          <div v-if="storageError" class="notice error" role="alert">{{ storageError }}</div>
+          <template v-if="page === 'assemble'">
+            <template v-if="!draft">
+              <section class="intro"><GameIcon name="gear" :size="35" /><div><h2>为你的旅程装配工作流</h2><p>导入 ComfyUI API JSON，自动组成素材与参数界面。</p></div></section>
+              <button class="gold-button wide" @click="newWorkflow('comfy')"><GameIcon name="add" />导入 ComfyUI 工作流</button>
+              <div v-if="!config.workflows.length" class="empty-state"><GameIcon name="cat" :size="48" /><h3>工匠猫正在等你</h3><p>准备好 API 格式工作流与服务地址，开始第一次装配。</p></div>
+              <article v-for="workflow in config.workflows" :key="workflow.id" class="parchment workflow-card" :class="{ selected: config.activeId === workflow.id }">
+                <div class="card-heading"><span class="seal"><GameIcon :name="workflow.provider === 'comfy' ? 'gear' : 'play'" /></span><div><h3>{{ workflow.name }}</h3><small>{{ workflow.provider === 'comfy' ? 'ComfyUI 工作流' : 'Runway 模块' }} · {{ workflow.fields.length }} 个输入</small></div><span v-if="config.activeId === workflow.id" class="badge">已装配</span></div>
+                <p class="connection"><i :class="connectionLabel(workflow) === '已连接' ? 'online' : ''"></i>{{ connectionLabel(workflow) }}<span>{{ workflow.address }}</span></p>
+                <div class="button-row"><button class="gold-button small" @click="equip(workflow)">{{ config.activeId === workflow.id ? '当前装配' : '装配' }}</button><button class="wood-button small" @click="edit(workflow)">编辑</button><button class="icon-button" aria-label="复制工作流配置" @click="duplicate(workflow)"><GameIcon name="edit" :size="18" /></button><button class="icon-button danger" aria-label="移除工作流配置" @click="confirmRemove = { type: 'workflow', item: workflow }"><GameIcon name="trash" :size="18" /></button></div>
+              </article>
+              <details class="parchment"><summary>其他已支持模块</summary><p class="muted">原有 Runway 动作迁移继续可用，需配置持有密钥的后端。</p><button class="wood-button" @click="newWorkflow('runway')">添加 Runway 模块</button><p class="muted">RunningHub 平台适配暂未纳入 0.01；原生 ComfyUI 服务可在本机电脑或云端运行。</p></details>
+            </template>
+            <section v-else class="parchment editor">
+              <div class="section-heading"><h2>{{ draft.provider === 'comfy' ? '工作流装配台' : 'Runway 配置' }}</h2><button class="text-button" @click="draft = null">返回列表</button></div>
+              <div class="field-group"><label for="workflow-name">工作流名称</label><input id="workflow-name" v-model="draft.name" maxlength="60" /></div>
+              <div class="field-group"><label for="workflow-address">{{ draft.provider === 'comfy' ? 'ComfyUI 服务地址' : 'Runway 后端地址' }}</label><input id="workflow-address" v-model="draft.address" placeholder="例如 http://192.168.1.8:8188" inputmode="url" /><small>电脑或云端服务负责生成，拉图负责操作与取回结果。</small></div>
+              <label v-if="draft.provider === 'comfy'" class="workflow-import"><GameIcon name="upload" :size="28" /><strong>{{ importing ? '正在识别…' : draft.graph ? '更换 API 工作流文件' : '选择 API 格式 JSON' }}</strong><small>从 ComfyUI 导出 API 格式，不是普通画布 JSON</small><input type="file" accept=".json,application/json" :disabled="importing" aria-label="导入 API 工作流文件" @change="importGraph" /></label>
+              <div v-if="draft.graph" class="assembly-stats"><span>{{ draft.nodeCount }}<small>节点</small></span><span>{{ draft.fields.filter(f => ['image','video','audio'].includes(f.kind)).length }}<small>素材输入</small></span><span>{{ draft.fields.filter(f => f.kind === 'textarea').length }}<small>文本输入</small></span><span>{{ draft.fields.length }}<small>输入字段</small></span></div>
+              <button class="wood-button wide" :disabled="testing || !draft.address" @click="test(draft)"><GameIcon name="wifi" />{{ testing ? '正在连接与读取节点定义…' : '测试连接 · 完善自动装配' }}</button>
+              <div v-for="warning in draft.warnings" :key="warning" class="notice">{{ warning }}</div>
+              <details v-if="draft.fields.length" class="field-mapping"><summary>调整界面模块（{{ draft.fields.length }}）</summary><p class="muted">常见节点已自动装配。特殊节点可更改模块类型和中文名；连接线保持不变。</p><div v-for="field in draft.fields" :key="field.id" class="mapping-row"><div><strong>{{ field.nodeTitle }}</strong><small>节点 {{ field.nodeId || '模块' }} · {{ field.name }}</small></div><input v-model="field.label" :aria-label="field.name + '显示名称'" /><select v-model="field.kind" :aria-label="field.name + '输入类型'" @change="field.customKind = true"><option v-for="kind in types" :key="kind" :value="kind">{{ ({ textarea:'提示词/多行文本',image:'图片上传',video:'视频上传',audio:'音频上传',number:'数值',select:'下拉选择',toggle:'开关',text:'单行文本' })[kind] }}</option></select><label class="check-label"><input type="checkbox" v-model="field.advanced" />高级参数</label></div></details>
+              <div class="button-row sticky-actions"><button class="wood-button" @click="saveWorkflow(false)">保存配置</button><button class="gold-button" :disabled="importing || testing" @click="saveWorkflow(true)"><GameIcon name="check" />保存并装配</button></div>
+            </section>
+          </template>
 
-      <div class="control-row">
-        <div>
-          <span class="label">肢体动作迁移</span>
-          <small>{{ characterType === 'image' ? 'Gesture / Body Control' : '角色视频模式不可用' }}</small>
-        </div>
-        <button
-          type="button"
-          class="switch"
-          :class="{ active: bodyControl && characterType === 'image', disabled: characterType === 'video' }"
-          :disabled="characterType === 'video'"
-          @click="bodyControl = !bodyControl"
-        >
-          <span></span>
-        </button>
-      </div>
+          <template v-else-if="page === 'workbench'">
+            <template v-if="active">
+              <section class="intro"><GameIcon name="book" :size="35" /><div><h2>{{ active.name }}</h2><p>{{ active.provider === 'comfy' ? 'ComfyUI · 自动装配界面' : 'Runway · 动作迁移' }}</p></div><button class="icon-button" aria-label="编辑当前工作流" @click="edit(active); page = 'assemble'"><GameIcon name="gear" /></button></section>
+              <section class="parchment"><p class="muted">素材与参数将发送到你配置的服务。返回主页不会取消已接收的任务。</p><div v-if="active.provider === 'runway' && active.characterVideo" class="field-group"><label for="character-mode">角色素材类型</label><select id="character-mode" v-model="characterMode" :disabled="busy" @change="files.character = null"><option value="image">图片</option><option value="video">视频（只迁移表情）</option></select></div><WorkflowField v-for="field in mainFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :disabled="busy" @file="chooseFile(field, $event)" /><details v-if="extraFields.length" :open="advanced" @toggle="advanced = $event.target.open"><summary>高级参数 · {{ extraFields.length }} 项</summary><WorkflowField v-for="field in extraFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :disabled="busy" @file="chooseFile(field, $event)" /></details><div v-if="!active.fields.length" class="notice">没有识别到输入字段，可在装配台连接服务后读取节点定义。</div></section>
+              <button class="gold-button wide submit-button" :disabled="busy" @click="generate"><GameIcon name="play" />{{ busy ? '正在上传与提交…' : '提交工作流' }}</button>
+              <section v-if="latestTask" class="parchment task-progress" aria-live="polite"><div class="section-heading"><h3>{{ STATUS[latestTask.status] || latestTask.status }}</h3><button class="text-button" @click="openTask(latestTask)">查看任务</button></div><p>{{ latestTask.detail }}</p><progress v-if="latestTask.progress !== null && latestTask.progress !== undefined" :value="latestTask.progress" max="100"></progress><small>{{ latestTask.remoteId || '等待服务端任务编号' }}</small></section>
+            </template><div v-else class="empty-state"><h2>还没有装配工作流</h2><button class="gold-button" @click="go('assemble')">前往装配</button></div>
+          </template>
 
-      <div class="field-group">
-        <label for="ratio">输出比例</label>
-        <select id="ratio" v-model="ratio">
-          <option value="720:1280">9:16 · 720×1280</option>
-          <option value="832:1104">3:4 · 832×1104</option>
-          <option value="960:960">1:1 · 960×960</option>
-          <option value="1104:832">4:3 · 1104×832</option>
-          <option value="1280:720">16:9 · 1280×720</option>
-          <option value="1584:672">超宽 · 1584×672</option>
-        </select>
-      </div>
+          <template v-else-if="page === 'history'">
+            <template v-if="selectedTask">
+              <section class="parchment"><div class="section-heading"><div><small>{{ date(selectedTask.createdAt) }}</small><h2>{{ selectedTask.workflow.name }}</h2></div><button class="icon-button" :class="{ favorite: selectedTask.favorite }" :aria-label="selectedTask.favorite ? '取消收藏' : '收藏任务'" @click="favorite(selectedTask)"><GameIcon name="heart" /></button></div><span class="status" :class="selectedTask.status.toLowerCase()">{{ STATUS[selectedTask.status] || selectedTask.status }}</span><p>{{ selectedTask.detail }}</p><code v-if="selectedTask.remoteId" class="task-id">{{ selectedTask.remoteId }}</code><div class="button-row"><button class="wood-button small" @click="refreshTask(selectedTask)"><GameIcon name="refresh" :size="16" />刷新</button><button class="gold-button small" @click="reuse(selectedTask)">使用相同参数</button><button v-if="selectedTask.status === 'PENDING' && selectedTask.workflow.provider === 'comfy'" class="text-button" @click="cancel(selectedTask)">移除排队任务</button></div></section>
+              <article v-for="output in selectedTask.outputs" :key="output.id" class="parchment output-card">
+                <div v-if="outputErrors[selectedTask.id + output.id]" class="notice">原文件暂不可用，可稍后刷新；任务记录仍保留。</div>
+                <video v-if="output.kind === 'video'" :src="output.url" controls playsinline preload="metadata" @error="outputErrors[selectedTask.id + output.id] = true"></video><audio v-else-if="output.kind === 'audio'" :src="output.url" controls></audio><a v-else :href="output.url" target="_blank" rel="noopener"><img :src="output.url" alt="生成结果" @error="outputErrors[selectedTask.id + output.id] = true" /></a>
+                <div class="button-row"><button class="gold-button small" :disabled="!!downloadKey" @click="saveOutput(selectedTask, output)"><GameIcon name="download" :size="17" />{{ downloadKey === selectedTask.id + output.id ? (downloadProgress === null ? '准备原文件…' : downloadProgress + '%') : '保存 / 分享原文件' }}</button><button class="wood-button small" @click="useAsInput(selectedTask, output)">用作素材</button></div>
+              </article>
+              <details class="parchment"><summary>当时的参数与来源</summary><p>{{ selectedTask.workflow.provider === 'comfy' ? 'ComfyUI' : 'Runway' }} · {{ selectedTask.workflow.address }}</p><dl class="parameter-list"><template v-for="item in publicValues(selectedTask)" :key="item.label"><dt>{{ item.label }}</dt><dd>{{ String(item.value) }}</dd></template></dl><p v-if="Object.keys(selectedTask.fileNames || {}).length" class="muted">原上传素材：{{ Object.values(selectedTask.fileNames).join('、') }}</p></details>
+              <button class="text-button danger" :disabled="!!selectedTask.remoteId && !TERMINAL.has(selectedTask.status)" @click="confirmRemove = { type: 'task', item: selectedTask }">移除此条本地记录</button>
+            </template>
+            <template v-else>
+              <section class="intro"><GameIcon name="scroll" :size="35" /><div><h2>你的创作图鉴</h2><p>{{ cachedSummary }}</p></div><button class="icon-button" aria-label="刷新进行中的任务" @click="pollAll(); notify('正在同步任务状态')"><GameIcon name="refresh" /></button></section>
+              <div class="filter-tabs" aria-label="任务筛选"><button v-for="item in [['all','全部'],['image','图片'],['video','视频'],['active','进行中'],['failed','需关注']]" :key="item[0]" :class="{ active: filter === item[0] }" @click="filter = item[0]">{{ item[1] }}</button></div>
+              <div class="history-filters"><label class="check-label"><input type="checkbox" v-model="favoriteOnly" />只看收藏</label><select v-model="workflowFilter" aria-label="按工作流筛选"><option value="">所有工作流</option><option v-for="[id, name] in historyWorkflows" :key="id" :value="id">{{ name }}</option></select></div>
+              <div v-if="!filteredTasks.length" class="empty-state"><GameIcon name="cat" :size="52" /><h3>{{ tasks.length ? '这里暂时没有匹配的记录' : '图鉴的第一页，等你点亮' }}</h3><p>生成的图片、视频和任务会留在这里。</p><button v-if="!tasks.length" class="gold-button" @click="go('workbench')">开始第一次创作</button></div>
+              <div class="history-grid"><button v-for="task in filteredTasks" :key="task.id" class="history-card" @click="openTask(task)"><TaskThumb :task="task" :output="task.outputs?.[0]" /><div class="history-info"><strong>{{ task.workflow.name }}</strong><span class="status" :class="task.status.toLowerCase()">{{ STATUS[task.status] || task.status }}</span><small>{{ date(task.createdAt) }}<span v-if="task.favorite"> · 已收藏</span></small><small v-if="task.outputs?.length > 1">{{ task.outputs.length }} 个结果</small></div></button></div>
+            </template>
+          </template>
 
-      <div class="field-group">
-        <div class="field-heading">
-          <label for="seed">Seed</label>
-          <button type="button" class="text-button" @click="randomSeed">随机</button>
-        </div>
-        <input id="seed" v-model="seed" inputmode="numeric" placeholder="留空 = 自动随机" />
+          <template v-else-if="page === 'settings'">
+            <section class="parchment"><h2>界面与互动</h2><label class="switch-row"><span>减少动态效果<small>保留即时点击反馈，关闭环境呼吸动画</small></span><input type="checkbox" v-model="config.settings.reducedMotion" @change="persist" /></label><label class="switch-row"><span>轻触反馈<small>设备支持时，点击会有轻微震动</small></span><input type="checkbox" v-model="config.settings.haptics" @change="persist" /></label></section>
+            <section class="parchment"><h2>记录与缓存</h2><p>{{ cachedSummary }}</p><p class="muted">缓存只用于缩略预览和原文件分享。清理缓存保留工作流、参数与任务记录。卸载应用会清除本地数据，请将重要原文件保存到手机。</p><button class="wood-button" @click="clearCache">清理预览与分享缓存</button></section>
+            <section class="parchment"><h2>服务配置</h2><p class="muted">服务地址、工作流和输入模块统一在装配台管理。</p><button class="gold-button" @click="go('assemble')">前往装配台</button></section>
+          </template>
+          <template v-else-if="page === 'about'">
+            <section class="parchment about-panel"><GameIcon name="cat" :size="56" /><h2>拉图</h2><p class="subtitle">把工作流，装进口袋。</p><span class="badge">v{{ DISPLAY_VERSION }} · 初航测试版</span><p>连接自己的 ComfyUI 或已配置的 API 服务，用熟悉的素材、提示词和参数，取回你的创作。</p><p class="muted">图片与视频由连接的电脑或云端服务生成。拉图负责前端操作、任务跟踪和作品图鉴。</p><a href="https://github.com/guqincheng95/comfyui_latula" target="_blank" rel="noopener">项目仓库与更新记录 ↗</a></section>
+            <section class="parchment"><h2>技术与美术</h2><p class="muted">Vue、Capacitor 及官方原生插件；ComfyUI 原生 API。参考 ComfyChair、ComfyUIMobileApp、Comfy Remote 的工作流与任务组织思路，本版未复制它们的源码。美术使用本项目确定的夜景三猫方案。</p><a href="/third-party-notices.txt" target="_blank" rel="noopener">查看第三方组件许可 ↗</a></section>
+          </template>
+          <template v-else-if="page === 'updates'">
+            <section class="parchment"><span class="badge">v{{ DISPLAY_VERSION }}</span><h2>月夜港湾 · 初次启航</h2><ul><li>三猫工坊主页与统一的木质金边界面</li><li>ComfyUI API 工作流导入与模块化自动装配</li><li>素材上传、任务状态与返回前台恢复查询</li><li>图片 / 视频图鉴、收藏与参数复用</li><li>保留原有 Runway 动作迁移</li></ul><p class="muted">当前通过项目构建页分发测试包，暂未配置应用内自动更新源。</p><a class="wood-button" href="https://github.com/guqincheng95/comfyui_latula/actions" target="_blank" rel="noopener">查看构建与更新</a></section>
+          </template>
+          <footer class="page-footer">拉图 · 每一次灵感，都有归处 <span>v{{ DISPLAY_VERSION }}</span></footer>
+        </main>
       </div>
-    </section>
-
-    <button class="generate-button" :disabled="!canGenerate" @click="generate">
-      <span v-if="submitting" class="spinner"></span>
-      {{ !apiBase ? '先设置后端地址' : submitting ? '正在提交…' : '开始生成' }}
-    </button>
-
-    <section v-if="taskStatus !== 'IDLE'" ref="resultSectionEl" class="result-zone">
-      <div class="result-zone-heading">
-        <div>
-          <small>RESULT</small>
-          <h2>生成结果</h2>
-        </div>
-        <span class="result-state-pill" :class="taskStatus.toLowerCase()">{{ statusLabel }}</span>
+      <Transition name="toast"><div v-if="toast" class="toast" role="status">{{ toast }}</div></Transition>
+      <div v-if="exitOpen || confirmRemove" class="modal-scrim" @click.self="exitOpen = false; confirmRemove = null">
+        <section class="parchment modal" role="dialog" aria-modal="true" :aria-label="exitOpen ? '离开拉图' : '移除确认'">
+          <template v-if="exitOpen"><h2>暂别月夜港湾？</h2><p>已被服务接收的任务会继续执行，回来后会同步状态。</p><p v-if="busy" class="notice">素材上传或任务提交尚未完成，现在离开可能中断。请先等待任务编号返回。</p><div class="button-row"><button class="wood-button" @click="exitOpen = false">留在这里</button><button class="gold-button" :disabled="busy" @click="exit">暂时离开</button></div></template>
+          <template v-else><h2>{{ confirmRemove.type === 'workflow' ? '移除本地装配配置？' : '移除此条本地记录？' }}</h2><p>远端工作流和结果文件不会删除。</p><div class="button-row"><button class="wood-button" @click="confirmRemove = null">保留</button><button class="gold-button" @click="confirmRemove.type === 'workflow' ? deleteWorkflow(confirmRemove.item) : removeRecord(confirmRemove.item)">确认移除</button></div></template>
+        </section>
       </div>
-
-      <div v-if="!resultUrl" class="panel result-waiting">
-        <div class="result-placeholder-icon">
-          <span v-if="taskStatus === 'FAILED'">!</span>
-          <span v-else class="spinner"></span>
-        </div>
-        <strong>{{ statusLabel }}</strong>
-        <p>{{ taskDetail }}</p>
-        <div v-if="taskId && !terminalStatuses.has(taskStatus)" class="background-tip">现在可以切到后台，Runway 会继续生成；返回 App 会自动同步任务状态。</div>
-        <code v-if="taskId">{{ taskId }}</code>
-        <div v-if="taskStatus === 'UPLOADING' || taskStatus === 'DIRECT_UPLOADING'" class="upload-progress-wrap">
-          <div class="upload-progress-text">
-            <span>{{ taskStatus === 'DIRECT_UPLOADING' ? '手机 → Runway' : '手机 → 阿里云' }}</span>
-            <strong>{{ uploadPercent }}%</strong>
-          </div>
-          <div class="upload-progress-track">
-            <span :style="{ width: uploadPercent + '%' }"></span>
-          </div>
-          <small>{{ formatBytes(uploadLoadedBytes) }} / {{ formatBytes(uploadTotalBytes) }}</small>
-        </div>
-        <div v-else-if="!terminalStatuses.has(taskStatus)" class="progress-track"><span></span></div>
-      </div>
-
-      <div v-else class="result-card">
-        <div class="result-success-note">生成完成 · 视频已返回</div>
-        <video :src="resultUrl" controls playsinline preload="metadata"></video>
-        <div class="result-actions">
-          <a :href="resultUrl" target="_blank" rel="noopener">全屏打开</a>
-          <a :href="resultUrl" download>下载视频</a>
-        </div>
-      </div>
-    </section>
-
-    <section v-if="lastRequestDebug" class="panel request-debug-panel">
-      <div class="request-debug-title">
-        <strong>本次 Act-Two 请求</strong>
-        <span>脱敏参数</span>
-      </div>
-      <div class="debug-grid">
-        <div><small>模型</small><strong>{{ lastRequestDebug.model }}</strong></div>
-        <div><small>角色输入</small><strong>{{ lastRequestDebug.character_type === 'video' ? '视频' : '图片' }}</strong></div>
-        <div><small>动作输入</small><strong>视频</strong></div>
-        <div><small>表情强度</small><strong>{{ lastRequestDebug.expression_intensity }}</strong></div>
-        <div><small>肢体动作</small><strong>{{ lastRequestDebug.body_control ? '开启' : '关闭' }}</strong></div>
-        <div><small>输出比例</small><strong>{{ lastRequestDebug.ratio }}</strong></div>
-        <div><small>Seed</small><strong>{{ lastRequestDebug.seed ?? '随机' }}</strong></div>
-      </div>
-    </section>
-
-    <p class="footnote">Runway API Key 只保存在后端 .env，不进入 APK。</p>
-  </main>
+    </template>
+  </div>
 </template>
