@@ -6,6 +6,20 @@
 
 APK 中文名为「拉图」，寓意从 ComfyUI 工作流或其他 AI API 拉取图片与结果。产品是直观方便的服务操作前端，承担素材上传、提示词和参数输入、任务提交与状态查看、结果预览/下载/管理。模型推理与图片、视频生成均在所连接的电脑或云端服务执行，APK 不承担生成算力。当前 Runway 模块及后续规划的边界见下文。
 
+## 本轮确认的技术来源与视觉方向
+
+用户指定技术借鉴来源为前三个客户端项目：ComfyChair、ComfyUIMobileApp、Comfy Remote。现有 Vue + Capacitor + FastAPI 工程继续作为主工程；优先复用可适配且授权清楚的成熟模块，不为接入这些参考项目而整体迁移 Kotlin 或 Flutter。官方接口文档继续作为协议依据，其他服务端包装项目不列为本轮引入对象。
+
+| 指定来源 | 优先参考/复用的技术 | 与本工程的结合方式 | 本轮核对状态 |
+| --- | --- | --- | --- |
+| ComfyChair | 工作流字段映射、服务连接、任务反馈、图片/视频结果组织 | 参考原生移动端的任务与交互设计；协议处理可按现有 Vue/Python 结构适配 | Kotlin/Compose，仓库标注 GPL-3.0；直接引入源码前确认该模块许可证与整合要求 |
+| ComfyUIMobileApp | API 格式工作流导入、参数编辑、素材选择、历史媒体查看 | 优先评估可迁移的协议/数据处理和 Python 辅助服务；Dart 界面逻辑需适配 Vue | 仓库标注 MIT；引入时保留相应声明与来源，不原样开放其本机管理接口 |
+| Comfy Remote（Comfy-App） | 手机 Web 与 APK 外壳分层、工作流注册表和字段映射、队列/结果反馈 | 技术形态最贴近现有工程，优先研究 Web/API/字段映射结构 | 仓库元数据未识别许可证，根目录未见 LICENSE；当前列为实现参考，复制分发源码前核实授权 |
+
+功能成熟度仍需用本项目选定工作流验证，不以 README 宣传或 Star 数作为通过依据。实际集成时记录来源仓库、提交 SHA、原文件/模块、采用方式、许可证及声明，验证上传、状态恢复、错误反馈和输出获取后再合入。新平台协议仍需要独立适配，不能因三个项目支持原生 ComfyUI 就宣称支持 RunningHub AI 应用 API。
+
+用户确定后续界面采用「道具式图标」为主要功能入口：图标承载主要识别作用，短名称辅助说明，带明确的点击反馈与互动动效。详细视觉与动效计划、候选设计技能/项目见 [UI 设计计划](UI_DESIGN_PLAN.md)。本轮仅更新计划，不重做界面或引入运行时依赖。
+
 ## 一、两条分类轴
 
 客户端形态与调用方式是两回事。网页、PWA、WebView APK、原生 APK 都可以直接发 HTTP API 请求；WebSocket 是实时通信协议，不等于网页模拟点击。
@@ -16,8 +30,6 @@ APK 中文名为「拉图」，寓意从 ComfyUI 工作流或其他 AI API 拉�
 | ComfyChair | Kotlin + Jetpack Compose 原生 Android | ComfyUI API | 可连通的本地或远程 ComfyUI；不等于已适配平台专有接口 |
 | ComfyUIMobileApp | Flutter Android 客户端 + Python 管理服务 | HTTP/WS 请求；配套 Python 服务负责启停、本机素材与状态管理 | 项目文档主要面向自己的电脑 |
 | Comfy Remote | Web/PWA + Android WebView 外壳 | 网页代码直接调用 ComfyUI API | 项目文档主要面向局域网 ComfyUI |
-| Salad comfyui-api | 服务端 API 包装层，无手机 UI | HTTP 接收任务，管理 ComfyUI 执行和输出 | 自建 GPU 本地机或云实例 |
-| comfy-api-proxy | 官方服务端适配层，无手机 UI | 对外 v2 jobs/assets API，对内原生 ComfyUI API | 一代理对应一 ComfyUI；不提供多机路由 |
 | 本仓库当前实现 | Vue + Capacitor APK + FastAPI | 手机请求自己的后端，后端请求 Runway；素材可临时授权直传 | Runway 云端模型 API |
 
 上述项目均不是靠自动打开网站、填写网页、点击生成按钮来完成主链路。文档功能不代表已在本项目实测兼容。
@@ -42,7 +54,7 @@ APK 中文名为「拉图」，寓意从 ComfyUI 工作流或其他 AI API 拉�
 
 官方 AI 应用示例说明旧 `/task/openapi/status` 已停止维护；接入时核对当前结果查询接口。不能复用旧博客里的查询代码而不验证。
 
-界面先参照 RunningHub 的应用卡片、表单、结果和历史体验。第一阶段维护人工审核的应用配置；平台字段可用于辅助导入，但不承诺任意工作流自动生成完美表单。
+业务组织参照 RunningHub 的应用选择、参数表单、结果和历史流程；视觉执行按道具式图标计划，不照搬其卡片外观。第一阶段维护人工审核的应用配置；平台字段可用于辅助导入，但不承诺任意工作流自动生成完美表单。
 
 ## 四、仓库复用结论
 
@@ -68,6 +80,8 @@ APK 中文名为「拉图」，寓意从 ComfyUI 工作流或其他 AI API 拉�
 4. 统一任务：内部 taskId 与 provider taskId 分开保存；后端保存任务映射和状态，手机断线后能恢复；超时提交先确认是否创建成功，禁止盲目重试造成重复扣费。
 5. 执行端扩展：增加原生 ComfyUI 适配，用同一表单对接本地电脑和自建云；RunningHub 工作流与 AI 应用分别适配。原 Runway 模块继续保留。
 6. 稳定与分发：多任务、历史收藏、结果归档、并发限制、日志脱敏；固定签名与递增 versionCode；再做公网部署和商业功能。
+
+视觉工作穿插进行：先做技术闭环与清楚的交互状态，再确定道具图标的风格稿、设计变量、动效样例，最后逐步替换应用入口和公共组件；详细顺序见 UI_DESIGN_PLAN.md。此计划不要求现在完成界面改造。
 
 建议先完成 RunningHub AI 应用闭环，贴近本轮参考产品；本地 ComfyUI 随后接入。无需为第一轮验证购买专用 GPU 服务器。是否切换云 GPU 取决于所选工作流实测耗时、调用量和费用。
 
@@ -103,7 +117,5 @@ APK 中文名为「拉图」，寓意从 ComfyUI 工作流或其他 AI API 拉�
 - ComfyChair：https://github.com/legal-hkr/comfychair
 - ComfyUIMobileApp：https://github.com/deni2312/ComfyUIMobileApp
 - Comfy Remote：https://github.com/MisterStepper/Comfy-App
-- API 包装层：https://github.com/SaladTechnologies/comfyui-api
-- 官方代理：https://github.com/Comfy-Org/comfy-api-proxy
 
 本次验证以源码审阅、前端构建和 Python 编译检查为范围。未执行真实平台生成，未验证现有线上服务存活或手机真机行为；具体检查结果以同次开发日志为准。
