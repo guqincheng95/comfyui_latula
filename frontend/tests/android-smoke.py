@@ -141,8 +141,17 @@ try:
     # Production has no origin override and this does not call any paid service.
     js("""(()=>{
       const rewrite=url=>typeof url==='string'&&url.startsWith('https://www.runninghub.cn/')?'http://10.0.2.2:5173/rh'+new URL(url).pathname:url;
-      const original=window.fetch.bind(window);window.fetch=(url,init)=>original(rewrite(url),init);
-      const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...args){return open.call(this,method,rewrite(url),...args)};
+      // Capacitor's constructor re-patches XHR prototypes for every instance.
+      // Redirect at its native HTTP bridge so fetch AND multipart use real native transport locally.
+      const cap=window.Capacitor,native=cap.nativePromise.bind(cap);window.__fixtureNativeUrls=[];
+      cap.nativePromise=(plugin,method,options,...args)=>{
+        if(plugin==='CapacitorHttp'&&method==='request'){
+          options={...options,url:rewrite(options.url)};
+          if(options.url.startsWith('https://www.runninghub.cn/'))throw Error('Fixture isolation failed');
+          window.__fixtureNativeUrls.push(options.url);
+        }
+        return native(plugin,method,options,...args);
+      };
     })()""")
     field('工作流链接或 ID','https://www.runninghub.cn/workflow/2121823324379631618?source=workspace')
     field('RunningHub API Key','fixture-only-not-a-real-api-key')
@@ -158,7 +167,7 @@ try:
     click('进入工作流')
     wait_text('提交工作流')
     field('正向提示词CLIPTextEncode','RunningHub Android 单分支验证')
-    js("(()=>{const input=document.querySelector('input[type=file][aria-label=\"参考图片\"]');const d=new DataTransfer();d.items.add(new File(['fixture image'],'reference.png',{type:'image/png'}));input.files=d.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()")
+    js("(()=>{const input=document.querySelector('input[type=file][aria-label=\"参考图片\"]');const d=new DataTransfer();const bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg=='),c=>c.charCodeAt(0));d.items.add(new File([bytes],'reference.png',{type:'image/png'}));input.files=d.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()")
     click('提交工作流')
     wait_text('已完成')
     click('查看任务')
@@ -169,6 +178,7 @@ try:
     request=next(iter(rh_jobs.values()))['request'];rh_graph=json.loads(request['workflow'])
     assert '91' not in rh_graph and rh_graph['1']['inputs']['image']=='openapi/fixture-uploaded.png'
     assert rh_graph['2']['inputs']['text']=='RunningHub Android 单分支验证'
+    assert js("window.__fixtureNativeUrls.some(url=>url.includes('/rh/openapi/v2/media/upload/binary'))") is True
     # Keystore ciphertext is checked on disk, and decryption must survive process death.
     encrypted=adb('shell','run-as',APP,'cat','shared_prefs/latula-credentials.xml',text=True)
     assert 'fixture-only-not-a-real-api-key' not in encrypted and 'name="value"' in encrypted

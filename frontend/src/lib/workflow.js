@@ -93,7 +93,7 @@ export function assembleWorkflow(graph, objectInfo = null) {
       fields.push({ id: nodeId + '::' + name, nodeId, name, label, nodeTitle: node._meta?.title || node.class_type, kind, default: value, enabled, advanced: template || !(file || kind === 'textarea' || common.has(name)), min: opts.min, max: opts.max, step: opts.step || (type === 'INT' || Number.isInteger(value) ? 1 : 0.01), options: kind === 'select' ? type.map(String) : undefined })
       count++
     }
-    if (!count && !schema && !adapter && !/Save|Decode|Loader|Sampler|Latent|Conditioning|Model|ImageScale|Preview/.test(node.class_type)) warnings.push('节点 ' + (node._meta?.title || node.class_type) + ' 未发现可编辑的基础字段；特殊交互可能需要适配。')
+    if (!count && !schema && !adapter && !/Save|Encode|Decode|Loader|Sampler|Latent|Conditioning|Model|ImageScale|Preview|showAnything|Comparer/.test(node.class_type)) warnings.push('节点 ' + (node._meta?.title || node.class_type) + ' 未发现可编辑的基础字段；特殊交互可能需要适配。')
   }
   if (unsupported.length) warnings.unshift('服务端未安装或未提供定义：' + [...new Set(unsupported)].join('、'))
   return { fields, warnings, missing: [...new Set(unsupported)], nodeCount: Object.keys(graph).length }
