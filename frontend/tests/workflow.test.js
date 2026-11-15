@@ -88,3 +88,16 @@ test('disables disconnected media without deleting graph nodes and keeps concate
  assert.match(assembled.warnings.join(' '),/未连接/)
  assert.equal(JSON.stringify(sample),original)
 })
+
+test('keeps cached previews out of inputs and tucks system/fixed prompts into advanced controls',()=>{
+ const sample={
+  '1':{class_type:'PrimitiveStringMultiline',inputs:{value:'change this'},_meta:{title:'重绘提示词'}},
+  '2':{class_type:'PrimitiveStringMultiline',inputs:{value:'fixed'},_meta:{title:'Text (System Prompt)'}},
+  '3':{class_type:'easy showAnything',inputs:{text:'cached preview',anything:['1',0]}}
+ }
+ const {fields}=assembleWorkflow(sample)
+ assert.equal(fields.find(f=>f.id==='1::value').label,'重绘提示词')
+ assert.equal(fields.find(f=>f.id==='1::value').advanced,false)
+ assert.equal(fields.find(f=>f.id==='2::value').advanced,true)
+ assert.ok(!fields.some(f=>f.id==='3::text'))
+})

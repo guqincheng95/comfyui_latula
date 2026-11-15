@@ -1,8 +1,8 @@
 # 拉图 · comfyui_latula
 
-版本 **0.01.1 维护测试版**（npm 版本 0.0.2，Android versionCode 302）。
+版本 **0.02 RunningHub 测试版**（npm 版本 0.0.3，Android versionCode 304）。
 
-**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.01.1/latula-v0.01.1-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.01.1)
+**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.02/latula-v0.02-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.02)
 
 手机安装请下载 `.apk` 文件；发布页中的 Source code 是源码压缩包。
 
@@ -22,7 +22,18 @@
 - 保留原 Runway 动作迁移的后端、直传/中转链路；不在 APK 内置平台密钥。
 - 关于、更新手札、减少动态效果、触感开关、缓存清理及离开应用。
 
-## 第一次使用
+## RunningHub 使用
+
+1. 装配工作流 → 接入 RunningHub 工作流，粘贴网页完整链接或工作流 ID。
+2. 填写自己的 API Key。安卓使用 Android Keystore 的 AES-GCM 加密保存；密钥与配置/任务快照分离，不写入仓库、安装包或日志。网页预览只保留在内存，刷新需重填。
+3. 选择「验证密钥 · 读取云端工作流」，或手动导入平台导出的 API JSON；读取会更新装配台的 JSON。验证仅查询工作流，不创建生成任务。
+4. 必须选择一个输出分支，可自定义分支名称；保存多份装配配置可用于快速切换各模式。
+5. 保存并装配，进入工作流，重新上传素材、填写提示词和参数后手动提交。
+6. 使用官方完整 workflow 参数提交所选输出及依赖节点，保持原始 JSON；不是只隐藏其他表单。返回的任务 ID 用于 V2 查询，重要结果及时保存。
+
+密钥只发送到固定 HTTPS 域名 www.runninghub.cn。生成使用自己的 RunningHub 账户额度；鉴权、工作流权限、节点和模型是否可运行以平台真实响应为准。本轮协议/安装检查使用本地模拟服务，未使用用户密钥调用付费 GPU 任务。遮罩绘制、复杂自定义前端控件仍需后续适配。
+
+## ComfyUI 第一次使用
 
 1. 启动电脑/云端的 ComfyUI，确保手机可以访问服务地址。
 2. 在 ComfyUI 中导出 **API 格式** JSON；普通节点画布 JSON 会得到明确提示。
@@ -37,7 +48,7 @@
 - 原生 ComfyUI HTTP API：/system_stats、/object_info、/upload/image、/prompt、/history、/queue、/view。
 - LoadImage、常见 CLIP/TextEncode、KSampler、尺寸/种子等标准输入有适配；其他节点的基础类型可依服务端定义装配。
 - 不保证任意自定义节点的前端交互、复杂列表、遮罩绘制、专有上传协议自动兼容。特殊节点适配集中在 frontend/src/lib/workflow.js。
-- 暂未接入 RunningHub 的 webappId / workflowId 专有平台接口。
+- RunningHub 工作流 API：链接/ID 导入、读取云端 API JSON、单输出分支裁剪、官方上传和创建任务、V2 结果查询；AI 应用 webappId、平台取消和账户额度查询暂未接入。
 - 取消只作用于原生 ComfyUI 中尚未开始的指定排队任务，不调用全局中断。
 - 原文件链接可能失效，重要作品请主动保存。卸载应用会清除本地记录。
 - 原生下载通过文件传输插件取得原文件后打开系统分享/保存面板；网页用浏览器下载。视频封面在网络/媒体跨域允许时缓存第一帧，否则保留可识别的预览占位。
@@ -67,6 +78,8 @@ Android：GitHub Actions 自动安装依赖、检查、生成原生项目、同�
 ## 项目文档
 
 - [固定签名与自动构建配置](docs/ANDROID_SIGNING.md)
+- [0.02 更新说明](docs/RELEASE_NOTES_0.02.md)
+- [RunningHub 接口与边界](docs/RUNNINGHUB.md)
 - [0.01 测试说明](docs/RELEASE_0.01.md)
 - [第一阶段规格](docs/PHASE1_SPEC.md)
 - [UI 设计计划](docs/UI_DESIGN_PLAN.md)

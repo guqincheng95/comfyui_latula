@@ -5,6 +5,7 @@ const config: CapacitorConfig = {
   appName: '拉图',
   webDir: 'dist',
   backgroundColor: '#080e18',
+  loggingBehavior: 'none',
   plugins: { CapacitorHttp: { enabled: true }, SystemBars: { style: 'DARK', initialViewportFitValueHint: 'cover' } },
   server: {
     androidScheme: 'http',

@@ -1,4 +1,4 @@
-export const DISPLAY_VERSION = '0.01.1'
+export const DISPLAY_VERSION = '0.02'
 export const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'INTERRUPTED'])
 export const STATUS = { UPLOADING: '上传中', SUBMITTING: '提交中', SUBMITTED: '已提交', PENDING: '排队中', RUNNING: '生成中', SUCCEEDED: '已完成', FAILED: '失败', CANCELED: '已取消', REVIEW: '提交状态待确认', INTERRUPTED: '上传已中断' }
 export const copy = value => JSON.parse(JSON.stringify(value))
@@ -39,7 +39,7 @@ const common = new Set(['width', 'height', 'batch_size', 'seed', 'noise_seed', '
 // A registry of adapters, rather than a separate screen per workflow.
 // Add a class-specific field resolver here when a custom node needs special handling.
 export const NODE_ADAPTERS = [
-  { match: name => /^(LoadImage|LoadImageMask|LoadImageOutput)$/.test(name), file: { image: 'image' } },
+  { match: name => /^(LoadImage|LoadImageMask|LoadImageOutput|LoadImageGoohai)$/.test(name), file: { image: 'image' } },
   { match: name => /^(VHS_LoadVideo|LoadVideo)$/.test(name), file: { video: 'video', file: 'video' } },
   { match: name => /^(LoadAudio|VHS_LoadAudio)$/.test(name), file: { audio: 'audio' } },
   { match: name => /CLIPTextEncode|TextEncode|Prompt|String|Text/i.test(name), multiline: true },
@@ -73,6 +73,8 @@ export function assembleWorkflow(graph, objectInfo = null) {
     let count = 0
     for (const [name, value] of Object.entries(node.inputs)) {
       if (isLink(value, graph) || value === null || typeof value === 'object') continue
+      // Preview widgets echo another linked value; editing their cached text does not alter that value.
+      if (/showAnything/i.test(node.class_type) && name === 'text') continue
       const meta = definition?.[name], type = meta?.[0], opts = meta?.[1] || {}
       let kind = typeof value === 'boolean' ? 'toggle' : typeof value === 'number' ? 'number' : 'text'
       if (Array.isArray(type)) kind = 'select'
@@ -83,10 +85,12 @@ export function assembleWorkflow(graph, objectInfo = null) {
       const file = ['image', 'video', 'audio'].includes(kind)
       const role = roles[nodeId]
       let label = labels[name] || name
+      if (kind === 'textarea' && /^(value|string)$/.test(name) && node._meta?.title) label = node._meta.title
       if (kind === 'textarea' && role) label = role === 'negative' ? '反向提示词' : '正向提示词'
       const enabled = !(file && roots.length && !ancestors.has(nodeId))
       if (!enabled) warnings.push('素材节点「' + (node._meta?.title || node.class_type) + '」未连接到已识别的媒体输出，已默认停用此输入。可在模块调整中重新启用；原工作流节点保持不变。')
-      fields.push({ id: nodeId + '::' + name, nodeId, name, label, nodeTitle: node._meta?.title || node.class_type, kind, default: value, enabled, advanced: !(file || kind === 'textarea' || common.has(name)), min: opts.min, max: opts.max, step: opts.step || (type === 'INT' || Number.isInteger(value) ? 1 : 0.01), options: kind === 'select' ? type.map(String) : undefined })
+      const template = kind === 'textarea' && (/system.?prompt|固定提示词|系统提示词/i.test(node._meta?.title || '') || String(value).length > 2048)
+      fields.push({ id: nodeId + '::' + name, nodeId, name, label, nodeTitle: node._meta?.title || node.class_type, kind, default: value, enabled, advanced: template || !(file || kind === 'textarea' || common.has(name)), min: opts.min, max: opts.max, step: opts.step || (type === 'INT' || Number.isInteger(value) ? 1 : 0.01), options: kind === 'select' ? type.map(String) : undefined })
       count++
     }
     if (!count && !schema && !adapter && !/Save|Decode|Loader|Sampler|Latent|Conditioning|Model|ImageScale|Preview/.test(node.class_type)) warnings.push('节点 ' + (node._meta?.title || node.class_type) + ' 未发现可编辑的基础字段；特殊交互可能需要适配。')

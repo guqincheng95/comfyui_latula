@@ -1,4 +1,6 @@
-import { comfyOutputs, copy, materializeGraph, resultKind, uid } from './workflow'
+import { comfyOutputs, copy, materializeGraph, parseWorkflow, resultKind, uid } from './workflow.js'
+import { RUNNINGHUB_ORIGIN, runningHubId, runningHubBody, runningHubResult } from './runninghub.js'
+import { getRunningHubKey } from './credentials.js'
 async function request(url, init = {}, timeout = 20000) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
@@ -19,6 +21,11 @@ async function request(url, init = {}, timeout = 20000) {
 }
 const postJSON = data => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 export async function checkConnection(workflow) {
+  if (workflow.provider === 'runninghub') {
+    const result = await runningHubRequest('/api/openapi/getJsonApiFormat', { workflowId: runningHubId(workflow.workflowId) })
+    const graph = parseWorkflow(result.data?.prompt)
+    return { graph, note: 'RunningHub 已连接，工作流可读取' }
+  }
   if (workflow.provider === 'comfy') {
     await request(workflow.address + '/system_stats')
     const info = await request(workflow.address + '/object_info', {}, 40000)
@@ -28,10 +35,11 @@ export async function checkConnection(workflow) {
   if (health.status !== 'ok') throw new Error('后端健康检查未通过')
   return { health, note: 'Runway 后端已连接' }
 }
-function upload(url, form, progress) {
+function upload(url, form, progress, headers = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', url)
+    Object.entries(headers).forEach(([name, value]) => xhr.setRequestHeader(name, value))
     xhr.responseType = 'json'
     xhr.timeout = 15 * 60 * 1000
     xhr.upload.onprogress = event => { if (event.lengthComputable) progress(Math.min(100, Math.round(event.loaded / event.total * 100))) }
@@ -47,6 +55,7 @@ function upload(url, form, progress) {
   })
 }
 export async function submitTask(workflow, values, files, update) {
+  if (workflow.provider === 'runninghub') return submitRunningHub(workflow, values, files, update)
   if (workflow.provider === 'runway') return submitRunway(workflow, values, files, update)
   const uploaded = {}, finalValues = copy(values)
   const media = workflow.fields.filter(field => ['image', 'video', 'audio'].includes(field.kind) && files[field.id])
@@ -118,6 +127,13 @@ async function relayRunway(workflow, values, files, update) {
 }
 export async function queryTask(task) {
   const workflow = task.workflow
+  if (workflow.provider === 'runninghub') {
+    const key = await requireRunningHubKey()
+    const result = await runningHubRequest('/openapi/v2/query', { taskId: task.remoteId }, key)
+    const change = runningHubResult(result, task.remoteId)
+    change.detail = redact(change.detail, key)
+    return change
+  }
   if (workflow.provider === 'runway') {
     const result = await request(workflow.address + '/api/tasks/' + encodeURIComponent(task.remoteId))
     const status = ({ THROTTLED: 'PENDING', CANCELLED: 'CANCELED' })[result.status] || result.status
@@ -139,6 +155,47 @@ export async function queryTask(task) {
   if (has(queue.queue_running)) return { status: 'RUNNING', detail: 'ComfyUI 正在执行', outputs: [] }
   if (has(queue.queue_pending)) return { status: 'PENDING', detail: '任务正在排队', outputs: [] }
   return { status: 'REVIEW', detail: '服务中暂未找到此任务，可能已重启或清理记录。保留本地任务，稍后可刷新；不会自动重提。', outputs: [] }
+}
+function redact(message, key) {
+  return String(message || '平台请求失败').split(key || '\u0000').join('••••••').replace(/Bearer\s+\S+/gi, 'Bearer ••••••')
+}
+async function requireRunningHubKey() {
+  const key = await getRunningHubKey()
+  if (!key) throw new Error('请在 RunningHub 配置中填写并保存 API Key，再查询或提交任务')
+  return key
+}
+async function runningHubRequest(path, body, suppliedKey) {
+  const key = suppliedKey || await requireRunningHubKey()
+  try {
+    // Credentials go only to this fixed HTTPS platform origin, never to a pasted workflow URL.
+    const init = postJSON(path.startsWith('/task/') || path.startsWith('/api/') ? { ...body, apiKey: key } : body)
+    init.headers.Authorization = 'Bearer ' + key
+    const result = await request(RUNNINGHUB_ORIGIN + path, init, 120000)
+    if (result?.code !== undefined && Number(result.code) !== 0) throw new Error('RunningHub ' + result.code + '：' + (result.msg || result.message || '请求失败'))
+    return result
+  } catch (error) { throw new Error(redact(error.message, key)) }
+}
+async function submitRunningHub(workflow, values, files, update) {
+  // Validate/prune BEFORE uploading anything. A branch choice is always explicit.
+  runningHubBody(workflow, values)
+  const key = await requireRunningHubKey(), uploaded = {}
+  const media = workflow.fields.filter(field => field.enabled !== false && ['image', 'video', 'audio'].includes(field.kind) && files[field.id])
+  for (const [index, field] of media.entries()) {
+    const form = new FormData()
+    form.append('file', files[field.id], files[field.id].name)
+    update({ status: 'UPLOADING', detail: '上传至 RunningHub ' + (index + 1) + '/' + media.length + ' · ' + field.label, progress: 0 })
+    let result
+    try { result = await upload(RUNNINGHUB_ORIGIN + '/openapi/v2/media/upload/binary', form, progress => update({ progress }), { Authorization: 'Bearer ' + key }) }
+    catch (error) { throw new Error(redact(error.message, key)) }
+    if (Number(result?.code) !== 0 || !result.data?.fileName) throw new Error('RunningHub 素材上传失败：' + redact(result?.message || result?.msg || '未返回 fileName', key))
+    uploaded[field.id] = result.data.fileName
+  }
+  const prepared = runningHubBody(workflow, values, uploaded)
+  update({ status: 'SUBMITTING', detail: '正在提交所选分支，请勿重复提交', progress: null })
+  // Never retry task creation: an ambiguous network failure might already have incurred a task.
+  const result = await runningHubRequest('/task/openapi/create', prepared.body, key)
+  if (!result.data?.taskId || typeof result.data.taskId !== 'string') throw new Error('平台未返回字符串任务编号，请先在 RunningHub 核对任务；不会自动重提')
+  return { remoteId: result.data.taskId, values: prepared.values, detail: 'RunningHub 已接收所选分支' }
 }
 export async function cancelTask(task) {
   if (task.workflow.provider !== 'comfy') throw new Error('此来源暂未适配单任务取消')

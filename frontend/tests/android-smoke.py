@@ -133,10 +133,57 @@ try:
     click('历史任务')
     wait_text('已收藏')
     screenshot('05-history-after-restart')
+    click('返回主页')
+    click('装配工作流')
+    click('接入 RunningHub 工作流')
+    wait_text('工作流链接或 ID')
+    # The test alone redirects the fixed official origin to the local fixture.
+    # Production has no origin override and this does not call any paid service.
+    js("""(()=>{
+      const rewrite=url=>typeof url==='string'&&url.startsWith('https://www.runninghub.cn/')?'http://10.0.2.2:5173/rh'+new URL(url).pathname:url;
+      const original=window.fetch.bind(window);window.fetch=(url,init)=>original(rewrite(url),init);
+      const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...args){return open.call(this,method,rewrite(url),...args)};
+    })()""")
+    field('工作流链接或 ID','https://www.runninghub.cn/workflow/2121823324379631618?source=workspace')
+    field('RunningHub API Key','fixture-only-not-a-real-api-key')
+    click('验证密钥 · 读取云端工作流')
+    wait_text('本次执行的输出分支')
+    assert js("document.getElementById('runninghub-output').value") == ''
+    js("(()=>{const select=document.getElementById('runninghub-output');select.value='10';select.dispatchEvent(new Event('change',{bubbles:true}))})()")
+    field('分支显示名称','图像编辑')
+    field('工作流名称','RunningHub 安装验证')
+    screenshot('06-runninghub-assembly')
+    click('保存并装配')
+    wait_text('进入工作流')
+    click('进入工作流')
+    wait_text('提交工作流')
+    field('正向提示词CLIPTextEncode','RunningHub Android 单分支验证')
+    js("(()=>{const input=document.querySelector('input[type=file][aria-label=\"参考图片\"]');const d=new DataTransfer();d.items.add(new File(['fixture image'],'reference.png',{type:'image/png'}));input.files=d.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()")
+    click('提交工作流')
+    wait_text('已完成')
+    click('查看任务')
+    wait_text('使用相同参数')
+    screenshot('07-runninghub-result')
+    rh_jobs=json.load(urllib.request.urlopen('http://127.0.0.1:5173/test-runninghub'))
+    assert len(rh_jobs)==1,rh_jobs
+    request=next(iter(rh_jobs.values()))['request'];rh_graph=json.loads(request['workflow'])
+    assert '91' not in rh_graph and rh_graph['1']['inputs']['image']=='openapi/fixture-uploaded.png'
+    assert rh_graph['2']['inputs']['text']=='RunningHub Android 单分支验证'
+    # Keystore ciphertext is checked on disk, and decryption must survive process death.
+    encrypted=adb('shell','run-as',APP,'cat','shared_prefs/latula-credentials.xml',text=True)
+    assert 'fixture-only-not-a-real-api-key' not in encrypted and 'name="value"' in encrypted
+    ws.close();ws=None
+    adb('forward','--remove','tcp:9222')
+    adb('shell','am','force-stop',APP)
+    adb('shell','am','start','-W','-n',APP+'/.MainActivity')
+    attach();wait_text('RunningHub 安装验证');click('进入工作流');wait_text('提交工作流')
+    assert js("document.getElementById('workbench-key').value==='fixture-only-not-a-real-api-key'") is True
+    assert len(json.load(urllib.request.urlopen('http://127.0.0.1:5173/test-runninghub')))==1,'Restart must not resubmit'
+    screenshot('08-runninghub-key-restored')
     logs = adb('logcat', '-d', '-s', 'AndroidRuntime:E', text=True)
     (OUT / 'android-runtime.log').write_text(logs)
     assert 'FATAL EXCEPTION' not in logs, logs
-    (OUT / 'summary.txt').write_text('PASS: Android 15 API 35 emulator: APK installed/launched; settings + native back; API import/schema assembly; native HTTP multipart upload and one submit; mock result; favorite; cold restart preferences/history; no AndroidRuntime fatal exception. Not a physical-phone or GPU generation test.\n')
+    (OUT / 'summary.txt').write_text('PASS: Android 15 API 35 emulator: install/launch/settings/native back; ComfyUI import/schema/native HTTP upload/submit/result/favorite/restart. RunningHub local fixture: pasted link, JSON read, mandatory branch, upload, one submit, V2 results; Android Keystore ciphertext and cold-restart decryption; no automatic resubmit or AndroidRuntime fatal exception. No real platform API, GPU generation, physical phone picker or paid API used.\n')
     print((OUT / 'summary.txt').read_text())
 except Exception:
     screenshot('failure')

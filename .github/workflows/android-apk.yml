@@ -67,6 +67,13 @@ jobs:
           npm ci
           npm test
           npm run build
+          npx playwright install --with-deps chromium
+          python tests/protocol-server.py > /tmp/latula-fixture.log 2>&1 &
+          FIXTURE_PID=$!
+          trap 'kill "$FIXTURE_PID" 2>/dev/null || true' EXIT
+          node tests/ui-check.mjs
+          kill "$FIXTURE_PID"
+          trap - EXIT
           npx cap add android
           python ../scripts/configure_android.py
           npx cap sync android
@@ -94,6 +101,12 @@ jobs:
       - name: Remove private signing working files
         if: always()
         run: rm -rf "$RUNNER_TEMP/latula-signing"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: latula-build-ui-checks
+          path: frontend/test-results/
+          if-no-files-found: ignore
   android-smoke:
     needs: build-apk
     if: needs.build-apk.outputs.ready == 'true'
@@ -132,3 +145,36 @@ jobs:
           name: latula-android-checks
           path: output/android-checks/
           if-no-files-found: ignore
+  publish:
+    needs: [build-apk, android-smoke]
+    if: github.ref == 'refs/heads/main' && needs.android-smoke.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_SHA: ${{ github.sha }}
+      APK_NAME: ${{ needs.build-apk.outputs.apk }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-apk.outputs.artifact }}
+          path: output
+      - name: Publish the signed and emulator-verified test APK
+        run: |
+          sha256sum -c output/SHA256SUMS.txt
+          VERSION=$(python -c "import json; print(json.load(open('frontend/version.json'))['name'])")
+          TAG="v$VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            mkdir -p /tmp/latula-existing
+            gh release download "$TAG" --pattern "$APK_NAME" --dir /tmp/latula-existing
+            cmp "output/$APK_NAME" "/tmp/latula-existing/$APK_NAME"
+          else
+            gh release create "$TAG" output/* --target "$SOURCE_SHA" \
+              --title "拉图 $VERSION · RunningHub 测试版" --prerelease \
+              --notes-file "docs/RELEASE_NOTES_$VERSION.md"
+          fi
