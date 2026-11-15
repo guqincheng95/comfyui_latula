@@ -3,6 +3,7 @@ No personal browser, GPU model or paid API is used. UI checks complement, not re
 a real phone's picker/share/video tests.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -78,7 +79,7 @@ def field(label, value):
     js("(()=>{const label=[...document.querySelectorAll('label')].find(x=>x.textContent.trim()===" + json.dumps(label) + ");if(!label)throw Error('Missing label');const input=document.getElementById(label.htmlFor);input.value=" + json.dumps(value) + ";input.dispatchEvent(new Event('input',{bubbles:true}))})()")
 
 try:
-    adb('install', '-r', str(ROOT / 'output/latula-v0.01-test.apk'))
+    adb('install', '-r', os.environ.get('ANDROID_APK_PATH',str(ROOT / 'output/latula-v0.01-test.apk')))
     adb('logcat', '-c')
     adb('shell', 'am', 'start', '-W', '-n', APP + '/.MainActivity')
     attach()

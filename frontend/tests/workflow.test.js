@@ -5,7 +5,8 @@ const graph = {
  '1': { class_type:'LoadImage',inputs:{image:'reference.png'} },
  '2': { class_type:'CLIPTextEncode',inputs:{text:'a cat',clip:['9',1]} },
  '3': { class_type:'CLIPTextEncode',inputs:{text:'blur',clip:['9',1]} },
- '4': { class_type:'KSampler',inputs:{model:['9',0],positive:['2',0],negative:['3',0],latent_image:['8',0],seed:12,steps:20,cfg:7,denoise:1,sampler_name:'euler'} },
+ '4': { class_type:'KSampler',inputs:{model:['9',0],positive:['2',0],negative:['3',0],latent_image:['6',0],seed:12,steps:20,cfg:7,denoise:1,sampler_name:'euler'} },
+ '6': { class_type:'VAEEncode',inputs:{pixels:['1',0],vae:['9',2]} },
  '8': { class_type:'EmptyLatentImage',inputs:{width:512,height:768,batch_size:1} },
  '9': { class_type:'CheckpointLoaderSimple',inputs:{ckpt_name:'model.safetensors'} },
  '10': { class_type:'SaveImage',inputs:{images:['4',0],filename_prefix:'test'} }
@@ -69,4 +70,21 @@ test('retains all image/video outputs and safely encodes filenames',()=>{
  assert.equal(result.length,2);assert.equal(result[1].kind,'video')
  assert.equal(new URL(result[0].url).searchParams.get('filename'),'a & b.png')
  assert.equal(new URL(result[0].url).searchParams.get('subfolder'),'one/two')
+})
+
+test('explains malformed addresses, phone loopback and listen addresses in Chinese',()=>{
+ assert.throws(()=>normalizeAddress('127.0.0.8188'),/冒号/)
+ for(const value of ['http://127.0.0.1:8188','127.1:8188','localhost:8188','http://[::1]:8188']) assert.throws(()=>normalizeAddress(value,{allowLoopback:false}),/手机自身/)
+ assert.throws(()=>normalizeAddress('0.0.0.0:8188'),/监听地址/)
+ assert.equal(normalizeAddress('192.168.1.8:8188',{allowLoopback:false}),'http://192.168.1.8:8188')
+})
+test('disables disconnected media without deleting graph nodes and keeps concatenation fragments advanced',()=>{
+ const sample={...graph,'144':{class_type:'LoadImage',inputs:{image:'unused.png'}},'87':{class_type:'Text Concatenate',inputs:{text_g:'',text_l:'',text_a:['2',0]}}}
+ const original=JSON.stringify(sample), assembled=assembleWorkflow(sample)
+ assert.equal(assembled.fields.find(f=>f.id==='144::image').enabled,false)
+ assert.equal(assembled.fields.find(f=>f.id==='1::image').enabled,true)
+ assert.equal(assembled.fields.find(f=>f.id==='87::text_g').kind,'text')
+ assert.equal(assembled.fields.find(f=>f.id==='87::text_g').advanced,true)
+ assert.match(assembled.warnings.join(' '),/未连接/)
+ assert.equal(JSON.stringify(sample),original)
 })

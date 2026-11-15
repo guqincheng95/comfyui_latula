@@ -1,0 +1,151 @@
+name: Establish permanent Android signing
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/bootstrap-signing.yml', 'scripts/android_signing.py']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: latula-signing-bootstrap
+  cancel-in-progress: false
+jobs:
+  establish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse to replace a pinned identity
+        run: test ! -f .github/signing/identity.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cryptography
+      - uses: actions/cache/restore@v4
+        id: original-key
+        with:
+          path: ~/.android/debug.keystore
+          key: latula-debug-keystore-v1
+      - name: Require the exact original test key
+        if: steps.original-key.outputs.cache-hit != 'true'
+        run: |
+          echo 'The original 0.01 key is no longer cached. Refusing to create a different replacement identity.' >&2
+          exit 1
+      - name: Recover published identity and create encrypted long-term backup
+        run: |
+          mkdir -p original output
+          gh release download v0.01 --pattern latula-v0.01-test.apk --dir original
+          APK_SIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          test -n "$APK_SIGNER"
+          echo "APK_SIGNER=$APK_SIGNER" >> "$GITHUB_ENV"
+          echo "SIGNING_DIR=$RUNNER_TEMP/latula-signing" >> "$GITHUB_ENV"
+          python scripts/android_signing.py bootstrap \
+            --directory "$RUNNER_TEMP/latula-signing" \
+            --legacy "$HOME/.android/debug.keystore" \
+            --original-apk original/latula-v0.01-test.apk \
+            --recipient .github/signing/bootstrap-recipient.pub.pem \
+            --apksigner "$APK_SIGNER" --output signing-public
+      - uses: actions/upload-artifact@v4
+        with:
+          name: latula-signing-bootstrap
+          path: signing-public/*
+          retention-days: 7
+      - name: Build the maintenance version
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+          npx cap add android
+          python ../scripts/configure_android.py
+          npx cap sync android
+          cd android
+          ./gradlew assembleDebug
+      - name: Apply fixed signing lineage and verify both Android ranges
+        run: |
+          python scripts/android_signing.py sign --directory "$SIGNING_DIR" \
+            --apksigner "$APK_SIGNER" \
+            --apk frontend/android/app/build/outputs/apk/debug/app-debug.apk \
+            --output output/latula-v0.01.1-test.apk
+          cp signing-public/latula-release-v1.pem signing-public/signing-identity.json output/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: latula-v0.01.1-test
+          path: output/*
+          retention-days: 30
+      - name: Remove runner private working files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/latula-signing"
+  upgrade-test:
+    needs: establish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: latula-v0.01.1-test
+          path: output
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install websocket-client
+      - run: gh release download v0.01 --pattern latula-v0.01-test.apk --dir output
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify 0.01 to 0.01.1 upgrade without clearing data
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048M
+          disable-animations: true
+          script: python frontend/tests/android-upgrade.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: latula-signing-upgrade-checks
+          path: output/android-checks/
+          if-no-files-found: ignore
+  publish:
+    needs: [establish, upgrade-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: latula-v0.01.1-test
+          path: output
+      - name: Publish tested fixed-signature maintenance build
+        run: |
+          sha256sum -c output/SHA256SUMS.txt
+          gh release create v0.01.1 \
+            output/latula-v0.01.1-test.apk output/SHA256SUMS.txt \
+            output/SIGNATURES.txt output/latula-release-v1.pem output/signing-identity.json \
+            --target "$GITHUB_SHA" --title '拉图 0.01.1 · 固定签名与连接提示修正' \
+            --prerelease --notes-file docs/RELEASE_NOTES_0.01.1.md

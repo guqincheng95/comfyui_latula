@@ -1,16 +1,19 @@
-export const DISPLAY_VERSION = '0.01'
+export const DISPLAY_VERSION = '0.01.1'
 export const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'INTERRUPTED'])
 export const STATUS = { UPLOADING: '上传中', SUBMITTING: '提交中', SUBMITTED: '已提交', PENDING: '排队中', RUNNING: '生成中', SUCCEEDED: '已完成', FAILED: '失败', CANCELED: '已取消', REVIEW: '提交状态待确认', INTERRUPTED: '上传已中断' }
 export const copy = value => JSON.parse(JSON.stringify(value))
 export const uid = () => globalThis.crypto?.randomUUID?.() || 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2)
 const safeKey = key => !['__proto__', 'prototype', 'constructor'].includes(key)
-export function normalizeAddress(value) {
+export function normalizeAddress(value, { allowLoopback = true } = {}) {
   let text = (value || '').trim().replace(/\/+$/, '')
   if (!text) throw new Error('请填写服务地址')
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) && !/^https?:\/\//i.test(text)) throw new Error('仅支持 http/https 服务')
   if (!/^https?:\/\//i.test(text)) text = 'http://' + text
-  const url = new URL(text)
+  let url
+  try { url = new URL(text) } catch { throw new Error('服务地址格式不正确。请填写 http://电脑局域网IP:8188，IP 和端口之间使用英文冒号。') }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('使用 http/https 服务地址，不在地址里填写密钥或查询参数')
+  if (url.hostname === '0.0.0.0' || url.hostname === '[::]') throw new Error('0.0.0.0 是服务监听地址，请改填电脑的实际局域网 IP 或云端域名。')
+  if (!allowLoopback && (url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || /^127\./.test(url.hostname) || url.hostname === '[::1]')) throw new Error('手机中的 127.0.0.1 / localhost 指向手机自身，无法访问电脑。请填写电脑局域网 IP，例如 http://192.168.1.8:8188。')
   return url.href.replace(/\/+$/, '')
 }
 export function parseWorkflow(raw) {
@@ -57,6 +60,10 @@ function branchRoles(graph) {
 }
 export function assembleWorkflow(graph, objectInfo = null) {
   const fields = [], warnings = [], roles = branchRoles(graph)
+  const roots = Object.keys(graph).filter(id => /^(SaveImage|PreviewImage|VHS_VideoCombine|SaveAudio|SaveVideo)$/.test(graph[id].class_type) || objectInfo?.[graph[id].class_type]?.output_node)
+  const ancestors = new Set()
+  function trace(id) { if (ancestors.has(id)) return; ancestors.add(id); for (const value of Object.values(graph[id].inputs)) if (isLink(value, graph)) trace(String(value[0])) }
+  roots.forEach(trace)
   const unsupported = []
   for (const [nodeId, node] of Object.entries(graph)) {
     const schema = objectInfo?.[node.class_type]
@@ -72,12 +79,14 @@ export function assembleWorkflow(graph, objectInfo = null) {
       else if (type === 'INT' || type === 'FLOAT') kind = 'number'
       else if (type === 'BOOLEAN') kind = 'toggle'
       if (adapter?.file?.[name]) kind = adapter.file[name]
-      else if (typeof value === 'string' && (opts.multiline || /^(text|prompt|positive|negative|text_g|text_l|clip_l|t5xxl)$/.test(name) || (adapter?.multiline && /value|string/i.test(name)))) kind = 'textarea'
+      else if (typeof value === 'string' && (opts.multiline || /^(text|prompt|positive|negative|clip_l|t5xxl)$/.test(name) || (/TextEncode/.test(node.class_type) && /^(text_g|text_l)$/.test(name)) || (adapter?.multiline && /value|string/i.test(name)))) kind = 'textarea'
       const file = ['image', 'video', 'audio'].includes(kind)
       const role = roles[nodeId]
       let label = labels[name] || name
       if (kind === 'textarea' && role) label = role === 'negative' ? '反向提示词' : '正向提示词'
-      fields.push({ id: nodeId + '::' + name, nodeId, name, label, nodeTitle: node._meta?.title || node.class_type, kind, default: value, advanced: !(file || kind === 'textarea' || common.has(name)), min: opts.min, max: opts.max, step: opts.step || (type === 'INT' || Number.isInteger(value) ? 1 : 0.01), options: kind === 'select' ? type.map(String) : undefined })
+      const enabled = !(file && roots.length && !ancestors.has(nodeId))
+      if (!enabled) warnings.push('素材节点「' + (node._meta?.title || node.class_type) + '」未连接到已识别的媒体输出，已默认停用此输入。可在模块调整中重新启用；原工作流节点保持不变。')
+      fields.push({ id: nodeId + '::' + name, nodeId, name, label, nodeTitle: node._meta?.title || node.class_type, kind, default: value, enabled, advanced: !(file || kind === 'textarea' || common.has(name)), min: opts.min, max: opts.max, step: opts.step || (type === 'INT' || Number.isInteger(value) ? 1 : 0.01), options: kind === 'select' ? type.map(String) : undefined })
       count++
     }
     if (!count && !schema && !adapter && !/Save|Decode|Loader|Sampler|Latent|Conditioning|Model|ImageScale|Preview/.test(node.class_type)) warnings.push('节点 ' + (node._meta?.title || node.class_type) + ' 未发现可编辑的基础字段；特殊交互可能需要适配。')

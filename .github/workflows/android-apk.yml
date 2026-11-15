@@ -2,81 +2,108 @@ name: Build Android APK
 on:
   push:
     branches: [main]
-    paths: ['frontend/**', '.github/workflows/android-apk.yml']
+    paths: ['frontend/**', 'scripts/android_signing.py', 'scripts/configure_android.py', '.github/signing/identity.json', '.github/workflows/android-apk.yml']
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.sign.outputs.ready }}
+      artifact: ${{ steps.version.outputs.artifact }}
+      apk: ${{ steps.version.outputs.apk }}
     steps:
       - uses: actions/checkout@v4
+      - name: Require persistent signing configuration
+        id: configured
+        env:
+          SIGNING_JSON: ${{ secrets.LATULA_ANDROID_SIGNING }}
+        run: |
+          if [ -n "$SIGNING_JSON" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo '### Android 签名配置待完成' >> "$GITHUB_STEP_SUMMARY"
+            echo '请添加仓库 Secret LATULA_ANDROID_SIGNING。没有固定签名时不生成 APK，不回退到临时或缓存签名。参见 docs/ANDROID_SIGNING.md。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Read maintained version
+        id: version
+        if: steps.configured.outputs.ready == 'true'
+        run: |
+          python - <<'PY'
+          import json, os
+          with open('frontend/version.json') as f:v=json.load(f)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+              f.write('artifact=latula-v'+v['name']+'-test\n')
+              f.write('apk=latula-v'+v['name']+'-test.apk\n')
+          PY
       - uses: actions/setup-node@v4
+        if: steps.configured.outputs.ready == 'true'
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - uses: actions/setup-java@v4
+        if: steps.configured.outputs.ready == 'true'
         with:
           distribution: temurin
-          java-version: "21"
-      - name: Keep this test line's debug signing identity
-        uses: actions/cache@v4
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        if: steps.configured.outputs.ready == 'true'
         with:
-          path: ~/.android/debug.keystore
-          key: latula-debug-keystore-v1
-      - name: Install and verify
+          python-version: '3.12'
+      - name: Restore and verify the pinned signing identity
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          LATULA_ANDROID_SIGNING: ${{ secrets.LATULA_ANDROID_SIGNING }}
+        run: |
+          pip install cryptography
+          python scripts/android_signing.py restore --directory "$RUNNER_TEMP/latula-signing"
+      - name: Install, verify and build
+        if: steps.configured.outputs.ready == 'true'
         working-directory: frontend
         run: |
           npm ci
           npm test
           npm run build
-      - name: Create Android project
-        working-directory: frontend
-        run: npx cap add android
-      - name: Configure test build
-        working-directory: frontend
+          npx cap add android
+          python ../scripts/configure_android.py
+          npx cap sync android
+          cd android
+          ./gradlew assembleDebug
+      - name: Sign and verify across Android versions
+        id: sign
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          APK_NAME: ${{ steps.version.outputs.apk }}
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          text = p.read_text()
-          if 'android:usesCleartextTraffic=' not in text:
-              text = text.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
-          text = text.replace('@mipmap/ic_launcher_round', '@drawable/latula_launcher').replace('@mipmap/ic_launcher', '@drawable/latula_launcher')
-          p.write_text(text)
-          import shutil
-          shutil.copyfile("native/latula_launcher.xml", "android/app/src/main/res/drawable/latula_launcher.xml")
-          shutil.copyfile("native/latula_styles.xml", "android/app/src/main/res/values/styles.xml")
-          p = Path("android/app/build.gradle")
-          text = p.read_text().replace("versionCode 1", "versionCode 301").replace('versionName "1.0"', 'versionName "0.01"')
-          p.write_text(text)
-          PY
-      - name: Sync native plugins
-        working-directory: frontend
-        run: npx cap sync android
-      - name: Build test APK
-        working-directory: frontend/android
-        run: ./gradlew assembleDebug
-      - name: Package
-        run: |
-          mkdir -p output
-          cp frontend/android/app/build/outputs/apk/debug/app-debug.apk output/latula-v0.01-test.apk
-          sha256sum output/latula-v0.01-test.apk > output/SHA256SUMS.txt
+          APK_SIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          python scripts/android_signing.py sign --directory "$RUNNER_TEMP/latula-signing" \
+            --apksigner "$APK_SIGNER" \
+            --apk frontend/android/app/build/outputs/apk/debug/app-debug.apk \
+            --output "output/$APK_NAME"
+          cp .github/signing/latula-release-v1.pem .github/signing/identity.json output/
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
+        if: steps.sign.outputs.ready == 'true'
         with:
-          name: latula-v0.01-test
+          name: ${{ steps.version.outputs.artifact }}
           path: output/*
-          if-no-files-found: error
           retention-days: 30
-
+      - name: Remove private signing working files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/latula-signing"
   android-smoke:
     needs: build-apk
+    if: needs.build-apk.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: latula-v0.01-test
+          name: ${{ needs.build-apk.outputs.artifact }}
           path: output
       - uses: actions/setup-python@v5
         with:
@@ -87,8 +114,10 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Install, launch and exercise the actual APK
+      - name: Exercise the signed APK
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ANDROID_APK_PATH: ${{ github.workspace }}/output/${{ needs.build-apk.outputs.apk }}
         with:
           api-level: 35
           target: google_apis

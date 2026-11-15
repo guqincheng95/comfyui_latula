@@ -89,12 +89,12 @@ async function importGraph(event) {
 async function test(workflow) {
   testing.value = true
   try {
-    workflow.address = normalizeAddress(workflow.address)
+    workflow.address = normalizeAddress(workflow.address, { allowLoopback: !Capacitor.isNativePlatform() })
     const result = await checkConnection(workflow)
     if (workflow.provider === 'comfy' && workflow.graph) {
       const assembled = assembleWorkflow(workflow.graph, result.objectInfo)
       const previous = new Map(workflow.fields.map(field => [field.id, field]))
-      assembled.fields = assembled.fields.map(field => { const saved = previous.get(field.id); return saved ? { ...field, label: saved.label, enabled: saved.enabled, advanced: saved.advanced, kind: saved.customKind ? saved.kind : field.kind, customKind: saved.customKind } : field })
+      assembled.fields = assembled.fields.map(field => { const saved = previous.get(field.id); return saved ? { ...field, label: saved.label, enabled: saved.enabled ?? field.enabled, advanced: saved.advanced, kind: saved.customKind ? saved.kind : field.kind, customKind: saved.customKind } : field })
       Object.assign(workflow, assembled)
       if (assembled.missing.length) throw new Error('服务已连通，但缺少工作流节点：' + assembled.missing.join('、'))
     }
@@ -107,7 +107,7 @@ async function test(workflow) {
 async function saveWorkflow(equip = true) {
   try {
     const workflow = draft.value
-    workflow.address = normalizeAddress(workflow.address)
+    workflow.address = normalizeAddress(workflow.address, { allowLoopback: !Capacitor.isNativePlatform() })
     if (!workflow.name.trim()) throw new Error('请输入工作流名称')
     if (workflow.provider === 'comfy' && !workflow.graph) throw new Error('请先导入 API 格式工作流')
     if (workflow.address !== workflow.checkedAddress) workflow.connection = 'unchecked'
@@ -153,7 +153,7 @@ async function generate() {
   let task, phase = ''
   try {
     const workflow = copy(active.value), input = copy(values), selectedFiles = { ...files }
-    workflow.address = normalizeAddress(workflow.address)
+    workflow.address = normalizeAddress(workflow.address, { allowLoopback: !Capacitor.isNativePlatform() })
     validateValues(workflow.fields.filter(field => field.enabled !== false), input, selectedFiles)
     if (workflow.provider === 'runway' && (!selectedFiles.character || !selectedFiles.reference)) throw new Error('请重新选择角色素材和动作视频')
     busy.value = true
@@ -306,12 +306,12 @@ onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearT
             <section v-else class="parchment editor">
               <div class="section-heading"><h2>{{ draft.provider === 'comfy' ? '工作流装配台' : 'Runway 配置' }}</h2><button class="text-button" @click="draft = null">返回列表</button></div>
               <div class="field-group"><label for="workflow-name">工作流名称</label><input id="workflow-name" v-model="draft.name" maxlength="60" /></div>
-              <div class="field-group"><label for="workflow-address">{{ draft.provider === 'comfy' ? 'ComfyUI 服务地址' : 'Runway 后端地址' }}</label><input id="workflow-address" v-model="draft.address" placeholder="例如 http://192.168.1.8:8188" inputmode="url" /><small>电脑或云端服务负责生成，拉图负责操作与取回结果。</small></div>
+              <div class="field-group"><label for="workflow-address">{{ draft.provider === 'comfy' ? 'ComfyUI 服务地址' : 'Runway 后端地址' }}</label><input id="workflow-address" v-model="draft.address" placeholder="例如 http://192.168.1.8:8188" inputmode="url" /><small>填写电脑局域网 IP 或云端域名。手机里的 127.0.0.1 指手机自身；电脑通常需开启局域网监听。</small></div>
               <label v-if="draft.provider === 'comfy'" class="workflow-import"><GameIcon name="upload" :size="28" /><strong>{{ importing ? '正在识别…' : draft.graph ? '更换 API 工作流文件' : '选择 API 格式 JSON' }}</strong><small>从 ComfyUI 导出 API 格式，不是普通画布 JSON</small><input type="file" accept=".json,application/json" :disabled="importing" aria-label="导入 API 工作流文件" @change="importGraph" /></label>
-              <div v-if="draft.graph" class="assembly-stats"><span>{{ draft.nodeCount }}<small>节点</small></span><span>{{ draft.fields.filter(f => ['image','video','audio'].includes(f.kind)).length }}<small>素材输入</small></span><span>{{ draft.fields.filter(f => f.kind === 'textarea').length }}<small>文本输入</small></span><span>{{ draft.fields.length }}<small>输入字段</small></span></div>
+              <div v-if="draft.graph" class="assembly-stats"><span>{{ draft.nodeCount }}<small>节点</small></span><span>{{ draft.fields.filter(f => f.enabled !== false && ['image','video','audio'].includes(f.kind)).length }}<small>素材输入</small></span><span>{{ draft.fields.filter(f => f.enabled !== false && f.kind === 'textarea').length }}<small>文本输入</small></span><span>{{ draft.fields.length }}<small>输入字段</small></span></div>
               <button class="wood-button wide" :disabled="testing || !draft.address" @click="test(draft)"><GameIcon name="wifi" />{{ testing ? '正在连接与读取节点定义…' : '测试连接 · 完善自动装配' }}</button>
               <div v-for="warning in draft.warnings" :key="warning" class="notice">{{ warning }}</div>
-              <details v-if="draft.fields.length" class="field-mapping"><summary>调整界面模块（{{ draft.fields.length }}）</summary><p class="muted">常见节点已自动装配。特殊节点可更改模块类型和中文名；连接线保持不变。</p><div v-for="field in draft.fields" :key="field.id" class="mapping-row"><div><strong>{{ field.nodeTitle }}</strong><small>节点 {{ field.nodeId || '模块' }} · {{ field.name }}</small></div><input v-model="field.label" :aria-label="field.name + '显示名称'" /><select v-model="field.kind" :aria-label="field.name + '输入类型'" @change="field.customKind = true"><option v-for="kind in types" :key="kind" :value="kind">{{ ({ textarea:'提示词/多行文本',image:'图片上传',video:'视频上传',audio:'音频上传',number:'数值',select:'下拉选择',toggle:'开关',text:'单行文本' })[kind] }}</option></select><label class="check-label"><input type="checkbox" v-model="field.advanced" />高级参数</label></div></details>
+              <details v-if="draft.fields.length" class="field-mapping"><summary>调整界面模块（{{ draft.fields.length }}）</summary><p class="muted">常见节点已自动装配。特殊节点可更改模块类型和中文名；连接线保持不变。</p><div v-for="field in draft.fields" :key="field.id" class="mapping-row"><div><strong>{{ field.nodeTitle }}</strong><small>节点 {{ field.nodeId || '模块' }} · {{ field.name }}</small></div><input v-model="field.label" :aria-label="field.name + '显示名称'" /><select v-model="field.kind" :aria-label="field.name + '输入类型'" @change="field.customKind = true"><option v-for="kind in types" :key="kind" :value="kind">{{ ({ textarea:'提示词/多行文本',image:'图片上传',video:'视频上传',audio:'音频上传',number:'数值',select:'下拉选择',toggle:'开关',text:'单行文本' })[kind] }}</option></select><label class="check-label"><input type="checkbox" v-model="field.enabled" />启用字段</label><label class="check-label"><input type="checkbox" v-model="field.advanced" />高级参数</label></div></details>
               <div class="button-row sticky-actions"><button class="wood-button" @click="saveWorkflow(false)">保存配置</button><button class="gold-button" :disabled="importing || testing" @click="saveWorkflow(true)"><GameIcon name="check" />保存并装配</button></div>
             </section>
           </template>

@@ -29,3 +29,11 @@ Thumbs.db
 
 frontend/android/
 frontend/test-results/
+
+# Android signing private material (public certificates stay under .github/signing)
+*.jks
+*.keystore
+*.p12
+*.pk8
+**/credentials.json
+**/LATULA_ANDROID_SIGNING.json
