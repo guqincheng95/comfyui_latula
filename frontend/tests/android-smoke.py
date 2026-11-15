@@ -15,7 +15,7 @@ import websocket
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'output/android-checks'
 OUT.mkdir(parents=True, exist_ok=True)
-APP = 'com.acttwomobile.app'
+APP = os.environ.get('ANDROID_APP_ID', 'com.latula.mobile')
 seq = 0
 ws = None
 server = subprocess.Popen([sys.executable, str(ROOT / 'frontend/tests/protocol-server.py')], stdout=(OUT / 'fixture.log').open('w'), stderr=subprocess.STDOUT)
@@ -151,3 +151,4 @@ finally:
     if ws:
         ws.close()
     server.terminate()
+    server.wait(timeout=10)

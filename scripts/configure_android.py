@@ -4,6 +4,7 @@ import json, re, shutil
 root=Path(__file__).resolve().parents[1]
 f=root/'frontend'
 v=json.loads((f/'version.json').read_text())
+assert "appId: 'com.latula.mobile'" in (f/'capacitor.config.ts').read_text(),'Permanent applicationId must not change'
 assert isinstance(v['code'],int) and v['code']>301
 assert re.search(r"DISPLAY_VERSION = '"+re.escape(v['name'])+"'",(f/'src/lib/workflow.js').read_text()),'UI and Android version differ'
 p=f/'android/app/src/main/AndroidManifest.xml';s=p.read_text()

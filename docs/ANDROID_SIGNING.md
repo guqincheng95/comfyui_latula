@@ -1,14 +1,16 @@
 # 拉图固定 Android 签名
 
-统一身份：`com.acttwomobile.app`。版本与 Android versionCode 维护在 `frontend/version.json`；发布更新必须递增 versionCode，UI 版本必须同步。
+正式包名：`com.latula.mobile`。旧测试包 `com.acttwomobile.app` 保留；两者数据独立，新包不会读取、清除或覆盖旧包记录。用户未选择迁移方式时默认采用保留数据的新旧共存方案。
 
-## 密钥与兼容
+版本与 Android versionCode 维护在 `frontend/version.json`；发布更新必须递增 versionCode，UI 版本必须同步。
+
+## 证书与一次性过渡
 
 新增长期 RSA-4096 自签名证书，别名 `latula-release-v1`，有效期 30 年。公钥证书与 SHA-256 指纹存入 `.github/signing`；私钥、密钥库和密码不能提交到仓库或公开 Release。
 
-旧 0.01 证书通过已缓存的原始私钥核对原版 APK，形成 Android proof-of-rotation。Android 13+ 使用新的 v3.1 签名；较旧系统继续使用固定旧签名，保证已有安装的兼容性。因此备份及仓库配置同时保留新旧两份密钥库和授权链。
+旧 0.01 的缓存配置未实际保存到签名私钥。核对原构建日志的 Path Validation Error，以及多份测试 APK 不同的证书指纹后，确认不能假装已有可用迁移授权链。因此新固定证书使用正式包名，与旧测试包共存；不要求先卸载旧包。新正式包后续以相同证书和包名覆盖升级。
 
-本阶段交付的是开发测试 APK；固定证书用于后续统一构建，不能据此声称已完成 Google Play 发布配置。
+本阶段交付仍是开发测试 APK；固定证书不能据此声称已完成 Google Play 发布配置。
 
 ## 唯一一次仓库配置
 
@@ -26,6 +28,6 @@
 
 - 构建只从上述 Secret 恢复固定身份，并与仓库公开指纹核对。
 - 没有 Secret 时清楚提示待配置，并停止生成 APK；不会回退到随机 debug key 或依赖缓存维持身份。
-- 签名后使用官方 apksigner 验证 Android API 24–32 与 33–36 的签名，并运行模拟器检查。
+- 签名后使用官方 apksigner 验证 Android API 24–32 与 33–36 的同一固定证书签名，并运行模拟器检查。
 - 引导工作流只用于首次建立身份；身份文件落库后拒绝再次生成证书。
 - 私密备份在用户文件中保存。公开产物只有 APK、公钥证书、校验值和公开身份说明；引导传输使用 RSA-OAEP-SHA256 与 AES-256-GCM 加密，不上传裸私钥。

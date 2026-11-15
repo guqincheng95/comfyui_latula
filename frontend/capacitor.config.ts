@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
-  appId: 'com.acttwomobile.app',
+  appId: 'com.latula.mobile',
   appName: '拉图',
   webDir: 'dist',
   backgroundColor: '#080e18',
