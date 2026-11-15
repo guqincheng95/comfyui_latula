@@ -65,3 +65,19 @@ test('explicit presentation overrides survive definition refresh without changin
  assert.equal(f.label,'细节步数');assert.equal(f.name,'steps');assert.equal(f.customAdvanced,true)
  assert.equal(ui.sampling.some(f=>f.id===original.id),false)
 })
+
+test('string bridges for sampler/scheduler are controls, while a negative-only bridge stays advanced',()=>{
+ const graph={
+ 'a':{class_type:'PrimitiveStringMultiline',inputs:{value:'euler'}},
+ 'b':{class_type:'PrimitiveStringMultiline',inputs:{value:'karras'}},
+ 'n':{class_type:'PrimitiveStringMultiline',inputs:{value:'unwanted'}},
+ 'run':{class_type:'UnknownSampler',inputs:{sampler_name:['a',0],scheduler:['b',0],negative:['n',0]}},
+ 'o':{class_type:'SaveImage',inputs:{images:['run',0]}}
+ }
+ const a=assembleGraphUI(graph),ui=buildUIModules(graph,a.fields,a.catalog)
+ assert.deepEqual(ui.sampling.map(f=>f.label),['采样器','调度方式'])
+ assert.ok(ui.sampling.every(f=>f.kind==='select'))
+ assert.equal(ui.prompts.length,0)
+ assert.ok(ui.advanced.find(g=>g.id==='n').fields.some(f=>f.id==='n::value'))
+ assert.deepEqual(all(ui).map(f=>f.id).sort(),a.fields.map(f=>f.id).sort())
+})

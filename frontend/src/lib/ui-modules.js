@@ -42,12 +42,12 @@ export function buildUIModules(graph={},fields=[],catalog={}){
    ?geometry.test(context+' '+title)||usage.some(n=>/latent|width|height|aspect_ratio/.test(n))||(!context&&role==='ratio')
    :sampling.test(context)||outputs.some(t=>['SAMPLER','SIGMAS','NOISE','GUIDER'].includes(t))||usage.some(n=>semantic(n)===role)||['sampler','scheduler'].includes(role))
   const isPrompt=['textarea','text'].includes(field.kind)&&(/^(text|prompt|positive|text_g|text_l|clip_l|t5xxl|string|value)$/i.test(field.name)||/提示词/.test(field.label))
-  const hiddenPrompt=/negative|反向|负面|system.?prompt|固定提示词|系统提示词|template/i.test(field.name+' '+title+' '+field.label)||String(field.default||'').length>2048
+  const hiddenPrompt=/negative|反向|负面|system.?prompt|固定提示词|系统提示词|template/i.test(field.name+' '+title+' '+field.label)||String(field.default||'').length>2048||usage.length>0&&usage.every(name=>/negative|system.?prompt/i.test(name))
   let section
   if(!field.customAdvanced){
    if(['image','video','audio'].includes(field.kind)&&!(field.virtualMask&&!field.maskReference))section='inputs'
-   else if(isPrompt&&!hiddenPrompt&&!field.path)section='prompts'
    else if(isSampling&&!field.path)section='sampling'
+   else if(isPrompt&&!role&&!hiddenPrompt&&!field.path)section='prompts'
   }
   if(section){
    const display={...field}
