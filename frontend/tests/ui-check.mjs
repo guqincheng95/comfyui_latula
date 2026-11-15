@@ -73,6 +73,9 @@ await page.route('https://www.runninghub.cn/**', async route => {
  const response = await route.fetch({url:'http://127.0.0.1:5173/rh'+url.pathname})
  await route.fulfill({response})
 })
+const platformResponses=[]
+page.on('response',response=>{if(response.url().startsWith('https://www.runninghub.cn/'))platformResponses.push({url:response.url(),status:response.status()})})
+await page.evaluate(()=>{window.__testToasts=[];new MutationObserver(()=>{const text=document.querySelector('.toast')?.textContent;if(text&&!window.__testToasts.includes(text))window.__testToasts.push(text)}).observe(document.body,{childList:true,subtree:true})})
 await page.getByRole('button',{name:'返回主页',exact:true}).click()
 await page.getByRole('button',{name:'装配工作流',exact:true}).click()
 await page.getByRole('button',{name:'接入 RunningHub 工作流',exact:true}).click()
@@ -92,7 +95,12 @@ await page.getByLabel('正向提示词').fill('RunningHub 单分支验证')
 await page.getByLabel('参考图片',{exact:true}).setInputFiles(path.join(root,'tests/fixtures/input.svg'))
 await page.screenshot({path:path.join(root,'test-results/runninghub-workbench.png'),fullPage:true})
 await page.getByRole('button',{name:'提交工作流',exact:true}).click()
-await page.getByRole('heading',{name:'已完成',exact:true}).waitFor({timeout:30000})
+await page.getByRole('heading',{name:'已完成',exact:true}).waitFor({timeout:30000}).catch(async error=>{
+ await page.screenshot({path:path.join(root,'test-results/runninghub-failure.png'),fullPage:true})
+ const diagnostic={page:await page.locator('body').innerText(),toasts:await page.evaluate(()=>window.__testToasts),responses:platformResponses}
+ await fs.writeFile(path.join(root,'test-results/runninghub-failure.json'),JSON.stringify(diagnostic,null,2))
+ throw new Error(error.message+'\n'+JSON.stringify(diagnostic))
+})
 await page.getByRole('button',{name:'查看任务',exact:true}).click()
 await page.locator('.output-card img').waitFor()
 const rhJobs = Object.values(await (await fetch('http://127.0.0.1:5173/test-runninghub')).json())
