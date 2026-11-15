@@ -56,7 +56,7 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path.endswith('/media/upload/binary'):
                 message=BytesParser(policy=policy.default).parsebytes(('Content-Type: '+self.headers.get('Content-Type','')+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
                 media=next((p for p in message.iter_parts() if p.get_param('name',header='content-disposition')=='file' and p.get_filename()),None)
-                if media is None or not media.get_payload(decode=True):return self.out({'code':400,'message':'Expected file'},400)
+                if media is None or not media.get_payload(decode=True):return self.out({'code':400,'message':'Expected file','type':self.headers.get('Content-Type'),'bodySize':len(body),'parts':[{'name':p.get_param('name',header='content-disposition'),'filename':p.get_filename()} for p in message.iter_parts()]},400)
                 return self.out({'code':0,'data':{'fileName':'openapi/fixture-uploaded.png'}})
             payload=json.loads(body)
             if self.path.endswith('/getJsonApiFormat'):return self.out({'code':0,'data':{'prompt':json.dumps(RH_GRAPH)}})

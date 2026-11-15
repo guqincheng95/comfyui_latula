@@ -70,7 +70,8 @@ assert.deepEqual(errors,[],'no uncaught runtime errors')
 // Route every platform request to a local fixture: never contact a billable API.
 await page.route('https://www.runninghub.cn/**', async route => {
  const url = new URL(route.request().url())
- const response = await route.fetch({url:'http://127.0.0.1:5173/rh'+url.pathname})
+ const response = await route.fetch({url:'http://127.0.0.1:5173/rh'+url.pathname,postData:route.request().postDataBuffer(),headers:await route.request().allHeaders()})
+ if(response.status()>=400)console.log('Fixture response:',await response.text())
  await route.fulfill({response})
 })
 const platformResponses=[]
