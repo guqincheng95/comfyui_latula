@@ -1,12 +1,12 @@
 <script setup>
 import PromptInput from './PromptInput.vue'
 import MediaInput from './MediaInput.vue'
-defineProps({ field: Object, modelValue: [String, Number, Boolean], file: Object, mask: Object, disabled: Boolean })
+defineProps({ field: Object, modelValue: [String, Number, Boolean], file: Object, mask: Object, disabled: Boolean, hideSource: Boolean })
 defineEmits(['update:modelValue', 'file', 'mask', 'clearMask'])
 </script>
 <template>
   <div class="field-group" :data-field-id="field.id">
-    <label :for="'field-' + field.id">{{ field.label }}<small v-if="field.nodeTitle">{{ field.nodeTitle }}</small></label>
+    <label :for="'field-' + field.id">{{ field.label }}<small v-if="field.nodeTitle && !hideSource">{{ field.nodeTitle }}</small></label>
     <MediaInput v-if="['image','video','audio'].includes(field.kind)" :field="field" :model-value="modelValue" :file="file" :disabled="disabled" @file="$emit('file', $event)" @update:model-value="$emit('update:modelValue', $event)" />
     <PromptInput v-else-if="field.kind === 'textarea'" :field="field" :model-value="modelValue" :disabled="disabled" @update:model-value="$emit('update:modelValue', $event)" />
     <select v-else-if="field.kind === 'select'" :id="'field-' + field.id" :value="modelValue" :disabled="disabled" @change="$emit('update:modelValue', field.valueType === 'number' ? Number($event.target.value) : field.valueType === 'boolean' ? $event.target.value === 'true' : $event.target.value)"><option v-for="option in field.options" :key="option" :value="option">{{ option }}</option></select>

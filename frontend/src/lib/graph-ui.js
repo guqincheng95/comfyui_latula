@@ -162,7 +162,7 @@ export function assembleGraphUI(graph, server = {}, previous = [], canvas = {}) 
   }
   result.fields = result.fields.map(field => {
     const saved = old.get(field.id)
-    return saved ? { ...field, label: saved.label, enabled: saved.enabled ?? field.enabled, advanced: saved.advanced, kind: saved.customKind ? saved.kind : field.kind, customKind: saved.customKind } : field
+    return saved ? { ...field, label: saved.label, enabled: saved.enabled ?? field.enabled, advanced: saved.advanced, kind: saved.customKind ? saved.kind : field.kind, customKind: saved.customKind, customLabel: saved.customLabel, customAdvanced: saved.customAdvanced } : field
   })
   return { ...result, catalog }
 }

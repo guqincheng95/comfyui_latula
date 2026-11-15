@@ -1,4 +1,4 @@
-export const DISPLAY_VERSION = '0.03.1'
+export const DISPLAY_VERSION = '0.04'
 export const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'INTERRUPTED'])
 export const STATUS = { UPLOADING: '上传中', SUBMITTING: '提交中', SUBMITTED: '已提交', PENDING: '排队中', RUNNING: '生成中', SUCCEEDED: '已完成', FAILED: '失败', CANCELED: '已取消', REVIEW: '提交状态待确认', INTERRUPTED: '上传已中断' }
 export const copy = value => JSON.parse(JSON.stringify(value))

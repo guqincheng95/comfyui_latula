@@ -1,8 +1,8 @@
 # 拉图 · comfyui_latula
 
-版本 **0.03.1 通用装配测试版**（npm 版本 0.0.4，Android versionCode 306）。
+版本 **0.04 通用操作模块测试版**（npm 版本 0.0.5，Android versionCode 307）。
 
-**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.03.1/latula-v0.03.1-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.03.1)
+**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.04/latula-v0.04-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.04)
 
 手机安装请下载 `.apk` 文件；发布页中的 Source code 是源码压缩包。
 
@@ -11,6 +11,8 @@
 拉图是 ComfyUI / AI API 的便捷操作前端。模型推理和图片、视频生成在用户连接的电脑或云端服务中完成。
 
 ## 已实现
+
+- 工作运行页统一为图片输入、提示词、采样与图片输出；其余控件按原节点折叠在高级设置，展开后显示。
 
 - 使用定稿的夜景三猫港湾主页；三个入口与内部页面统一深色木质、金边与冷暖像素美术。
 - 导入 ComfyUI **API 格式 JSON**，自动识别提示词、图片/视频/音频、数值、下拉和开关输入。

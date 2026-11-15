@@ -4,8 +4,10 @@ import { Capacitor } from '@capacitor/core'
 import { App as NativeApp } from '@capacitor/app'
 import { Haptics, ImpactStyle } from '@capacitor/haptics'
 import GameIcon from './components/GameIcon.vue'
-import WorkflowField from './components/WorkflowField.vue'
-import ReferenceInputs from './components/ReferenceInputs.vue'
+import ModuleFields from './components/ModuleFields.vue'
+import WorkbenchModule from './components/WorkbenchModule.vue'
+import AdvancedModules from './components/AdvancedModules.vue'
+import { buildUIModules } from './lib/ui-modules'
 import MaskEditor from './components/MaskEditor.vue'
 import TaskThumb from './components/TaskThumb.vue'
 import { assembleWorkflow, copy, defaults, DISPLAY_VERSION, normalizeAddress, parseWorkflow, STATUS, TERMINAL, uid, validateValues } from './lib/workflow'
@@ -19,7 +21,7 @@ import { assembleGraphUI, nodeCatalog, compileGraph, runtimeOutputs, bypassLinks
 const loaded = ref(false), fatal = ref('')
 const page = ref('home'), toast = ref(''), storageError = ref('')
 const config = reactive({ workflows: [], activeId: '', drafts: {}, settings: { reducedMotion: false, haptics: true } })
-const tasks = ref([]), draft = ref(null), importing = ref(false), testing = ref(false), busy = ref(false), advanced = ref(false)
+const tasks = ref([]), draft = ref(null), importing = ref(false), testing = ref(false), busy = ref(false)
 const values = reactive({}), files = reactive({})
 const selectedTaskId = ref(''), filter = ref('all'), favoriteOnly = ref(false), workflowFilter = ref('')
 const downloadKey = ref(''), downloadProgress = ref(null), outputErrors = reactive({})
@@ -43,7 +45,6 @@ const projection = computed(() => {
   catch (error) { return { visible: new Set(), error: error.message } }
 })
 const visibleFields = computed(() => (active.value?.fields || []).filter(f => f.enabled !== false && (!active.value?.runtime || (projection.value.visible.has(f.nodeId) && active.value.runtime.nodeModes?.[f.nodeId] !== 'bypass'))))
-const referenceGroups = computed(() => [...new Set(visibleFields.value.filter(f => f.mediaGroup && !f.advanced).map(f => f.mediaGroup))].map(id => ({ id, fields: visibleFields.value.filter(f => f.mediaGroup === id && !f.advanced) })))
 const runtimeNodes = computed(() => {
   const workflow = active.value
   if (!workflow?.runtime || !workflow.runtime.outputs.length) return []
@@ -56,10 +57,10 @@ const runtimeNodes = computed(() => {
   })
 })
 const activeCount = computed(() => tasks.value.filter(task => task.remoteId && !TERMINAL.has(task.status)).length)
-const latestTask = computed(() => tasks.value.find(task => task.workflow.id === active.value?.id))
+const latestTask = computed(() => tasks.value.find(task => task.workflow.id === active.value?.id && (!active.value?.runtime || JSON.stringify([...(task.workflow.runtime?.outputs || [])].sort()) === JSON.stringify([...active.value.runtime.outputs].sort()))))
+const uiModules = computed(() => buildUIModules(active.value?.graph, visibleFields.value.map(field => active.value?.provider === 'runway' && field.id === 'character' ? { ...field, kind: characterMode.value } : field), catalog.value))
+const operations = [{id:'inputs',title:'图片输入',icon:'image',hint:'原图、多图参考与遮罩',empty:'当前功能无需上传图片。'}, {id:'prompts',title:'提示词输入',icon:'scroll',hint:'描述你想要的画面',empty:'当前功能沿用工作流内置提示。'}, {id:'sampling',title:'采样设置',icon:'gear',hint:'控制随机性、步数与画面生成',empty:'当前功能沿用工作流内置采样。'}]
 const selectedTask = computed(() => tasks.value.find(task => task.id === selectedTaskId.value))
-const mainFields = computed(() => visibleFields.value.filter(field => !field.advanced && !field.mediaGroup).map(field => active.value?.provider === 'runway' && field.id === 'character' ? { ...field, kind: characterMode.value } : field))
-const extraFields = computed(() => visibleFields.value.filter(field => field.advanced))
 const pageTitle = computed(() => ({ assemble: '装配工作流', workbench: active.value?.name || '工作流工坊', history: selectedTask.value ? '作品详情' : '历史图鉴', settings: '旅途设置', about: '关于拉图', updates: '更新手札' })[page.value])
 const filteredTasks = computed(() => tasks.value.filter(task => {
   if (favoriteOnly.value && !task.favorite) return false
@@ -464,7 +465,7 @@ onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearT
               <div v-if="draft.graph" class="assembly-stats"><span>{{ draft.nodeCount }}<small>节点</small></span><span>{{ draft.fields.filter(f => f.enabled !== false && ['image','video','audio'].includes(f.kind)).length }}<small>素材输入</small></span><span>{{ draft.fields.filter(f => f.enabled !== false && f.kind === 'textarea').length }}<small>文本输入</small></span><span>{{ draft.fields.length }}<small>输入字段</small></span></div>
               <button class="wood-button wide" :disabled="testing || (draft.provider !== 'runninghub' && !draft.address)" @click="test(draft)"><GameIcon name="wifi" />{{ testing ? '正在连接与读取…' : draft.provider === 'runninghub' ? '验证密钥 · 读取云端工作流' : '测试连接 · 完善自动装配' }}</button>
               <div v-for="warning in draft.warnings" :key="warning" class="notice">{{ warning }}</div>
-              <details v-if="draft.fields.length" class="field-mapping"><summary>调整界面模块（{{ draft.fields.length }}）</summary><p class="muted">常见节点已自动装配。特殊节点可更改模块类型和中文名；连接线保持不变。</p><div v-for="field in draft.fields" :key="field.id" class="mapping-row"><div><strong>{{ field.nodeTitle }}</strong><small>节点 {{ field.nodeId || '模块' }} · {{ field.name }}</small></div><input v-model="field.label" :aria-label="field.name + '显示名称'" /><select v-model="field.kind" :aria-label="field.name + '输入类型'" @change="field.customKind = true"><option v-for="kind in types" :key="kind" :value="kind">{{ ({ textarea:'提示词/多行文本',image:'图片上传',video:'视频上传',audio:'音频上传',number:'数值',select:'下拉选择',toggle:'开关',text:'单行文本' })[kind] }}</option></select><label class="check-label"><input type="checkbox" v-model="field.enabled" />启用字段</label><label class="check-label"><input type="checkbox" v-model="field.advanced" />高级参数</label></div></details>
+              <details v-if="draft.fields.length" class="field-mapping"><summary>调整界面模块（{{ draft.fields.length }}）</summary><p class="muted">常见节点已自动装配。特殊节点可更改模块类型和中文名；连接线保持不变。</p><div v-for="field in draft.fields" :key="field.id" class="mapping-row"><div><strong>{{ field.nodeTitle }}</strong><small>节点 {{ field.nodeId || '模块' }} · {{ field.name }}</small></div><input v-model="field.label" @change="field.customLabel = true" :aria-label="field.name + '显示名称'" /><select v-model="field.kind" :aria-label="field.name + '输入类型'" @change="field.customKind = true"><option v-for="kind in types" :key="kind" :value="kind">{{ ({ textarea:'提示词/多行文本',image:'图片上传',video:'视频上传',audio:'音频上传',number:'数值',select:'下拉选择',toggle:'开关',text:'单行文本' })[kind] }}</option></select><label class="check-label"><input type="checkbox" v-model="field.enabled" />启用字段</label><label class="check-label"><input type="checkbox" v-model="field.advanced" @change="field.customAdvanced = field.advanced" />高级参数</label></div></details>
               <div class="button-row sticky-actions"><button class="wood-button" @click="saveWorkflow(false)">保存配置</button><button class="gold-button" :disabled="importing || testing" @click="saveWorkflow(true)"><GameIcon name="check" />保存并装配</button></div>
             </section>
           </template>
@@ -479,9 +480,20 @@ onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearT
                 <button class="text-button" :disabled="syncing || busy" @click="syncDefinitions()">{{ syncing ? '正在同步…' : '同步控件选项' }}</button>
               </section>
               <section v-if="active.provider === 'runninghub'" class="parchment"><div class="field-group"><label for="workbench-key">RunningHub API Key</label><input id="workbench-key" type="password" v-model="apiKeyInput" autocomplete="off" autocapitalize="off" spellcheck="false" @input="keySaved = false" placeholder="填写你自己的 API Key" /><small>{{ keySaved ? '本机密钥已就绪' : '提交前请填写密钥' }} · 工作流 {{ active.workflowId }}</small><button class="text-button" @click="saveKeyButton">保存密钥</button></div><p class="muted">提交将使用 RunningHub 账户额度。按当前启用/旁路状态提交执行图；网络异常不会自动重新提交。</p></section>
-              <section class="parchment"><p class="muted">素材与参数将发送到你配置的服务。返回主页不会取消已接收的任务。</p><div v-if="active.provider === 'runway' && active.characterVideo" class="field-group"><label for="character-mode">角色素材类型</label><select id="character-mode" v-model="characterMode" :disabled="busy" @change="files.character = null"><option value="image">图片</option><option value="video">视频（只迁移表情）</option></select></div><ReferenceInputs v-for="group in referenceGroups" :key="group.id" :fields="group.fields" :values="values" :files="files" :disabled="busy" @file="chooseFile" @value="(field,value) => values[field.id] = value" @mask="openMask" @clear-mask="clearMask" @notice="notify" /><WorkflowField v-for="field in mainFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :mask="files[field.id + '::$mask']" :disabled="busy" @file="chooseFile(field, $event)" @mask="openMask(field)" @clear-mask="clearMask(field)" /><details v-if="extraFields.length" :open="advanced" @toggle="advanced = $event.target.open"><summary>高级参数 · {{ extraFields.length }} 项</summary><WorkflowField v-for="field in extraFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :mask="files[field.id + '::$mask']" :disabled="busy" @file="chooseFile(field, $event)" @mask="openMask(field)" @clear-mask="clearMask(field)" /></details><div v-if="!active.fields.length" class="notice">没有识别到输入字段，可在装配台连接服务后读取节点定义。</div></section>
+              <p class="workbench-note muted">只显示当前功能的关键操作，其余参数在高级设置中按节点查看。</p>
+              <div v-if="active.provider === 'runway' && active.characterVideo" class="field-group"><label for="character-mode">角色素材类型</label><select id="character-mode" v-model="characterMode" :disabled="busy" @change="files.character = null"><option value="image">图片</option><option value="video">视频（只迁移表情）</option></select></div>
+              <WorkbenchModule v-for="operation in operations" :key="operation.id" :title="operation.title" :icon="operation.icon" :hint="operation.hint" :role-name="operation.id">
+                <ModuleFields :fields="uiModules[operation.id]" :values="values" :files="files" :disabled="busy" @file="chooseFile" @value="(field,value) => values[field.id] = value" @mask="openMask" @clear-mask="clearMask" @notice="notify" />
+                <p v-if="!uiModules[operation.id].length" class="module-empty muted">{{ operation.empty }}</p>
+              </WorkbenchModule>
+              <AdvancedModules v-if="uiModules.advanced.length" :key="active.id" :groups="uiModules.advanced" :values="values" :files="files" :disabled="busy" @file="chooseFile" @value="(field,value) => values[field.id] = value" @mask="openMask" @clear-mask="clearMask" @notice="notify" />
               <button class="gold-button wide submit-button" :disabled="busy || !!projection.error" @click="generate"><GameIcon name="play" />{{ busy ? '正在上传与提交…' : '提交工作流' }}</button>
-              <section v-if="latestTask" class="parchment task-progress" aria-live="polite"><div class="section-heading"><h3>{{ STATUS[latestTask.status] || latestTask.status }}</h3><button class="text-button" @click="openTask(latestTask)">查看任务</button></div><p>{{ latestTask.detail }}</p><progress v-if="latestTask.progress !== null && latestTask.progress !== undefined" :value="latestTask.progress" max="100"></progress><small>{{ latestTask.remoteId || '等待服务端任务编号' }}</small></section>
+              <WorkbenchModule title="图片输出" icon="book" hint="图片与视频结果，点击查看或保存" role-name="outputs">
+                <template v-if="latestTask" #action><button class="text-button" @click="openTask(latestTask)">查看任务</button></template>
+                <div v-if="latestTask" class="task-progress" aria-live="polite"><h3>{{ STATUS[latestTask.status] || latestTask.status }}</h3><p>{{ latestTask.detail }}</p><progress v-if="latestTask.progress !== null && latestTask.progress !== undefined" :value="latestTask.progress" max="100"></progress><small>{{ latestTask.remoteId || '等待服务端任务编号' }}</small>
+                  <div v-if="latestTask.outputs?.length" class="result-grid"><button v-for="(output,index) in latestTask.outputs" :key="latestTask.id + ':' + index" :aria-label="'查看生成结果 ' + (index+1)" @click="openTask(latestTask)"><TaskThumb :task="latestTask" :output="output" /></button></div>
+                </div><p v-else class="module-empty muted">生成结果将在这里显示，也会保存在历史图鉴中。</p>
+              </WorkbenchModule>
             </template><div v-else class="empty-state"><h2>还没有装配工作流</h2><button class="gold-button" @click="go('assemble')">前往装配</button></div>
           </template>
 
@@ -515,7 +527,7 @@ onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearT
             <section class="parchment"><h2>技术与美术</h2><p class="muted">Vue、Capacitor 及官方原生插件；ComfyUI 原生 API。参考 ComfyChair、ComfyUIMobileApp、Comfy Remote 的工作流与任务组织思路，本版未复制它们的源码。美术使用本项目确定的夜景三猫方案。</p><a href="/third-party-notices.txt" target="_blank" rel="noopener">查看第三方组件许可 ↗</a></section>
           </template>
           <template v-else-if="page === 'updates'">
-            <section class="parchment"><span class="badge">v{{ DISPLAY_VERSION }}</span><h2>月夜港湾 · 云端工坊</h2><ul><li>新增通用装配引擎、节点定义驱动控件、多图参考与遮罩画板</li><li>完整工作流在运行页切换模块、节点旁路和多输出组合</li><li>Android Keystore 加密保存平台密钥，与任务记录分离</li><li>三猫工坊主页与统一的木质金边界面</li><li>ComfyUI API 工作流导入与模块化自动装配</li><li>素材上传、任务状态与返回前台恢复查询</li><li>图片 / 视频图鉴、收藏与参数复用</li><li>保留原有 Runway 动作迁移</li></ul><p class="muted">安装包在仓库 Releases 中下载；保持固定签名，可覆盖更新。暂未配置应用内自动更新源。</p><a class="wood-button" href="https://github.com/guqincheng95/comfyui_latula/releases" target="_blank" rel="noopener">下载安装包</a></section>
+            <section class="parchment"><span class="badge">v{{ DISPLAY_VERSION }}</span><h2>月夜港湾 · 云端工坊</h2><ul><li>运行页统一为图片输入、提示词、采样与图片输出模块</li><li>其余参数按原节点收进高级设置，展开才显示</li><li>节点定义驱动控件、多图参考与遮罩画板</li><li>完整工作流在运行页切换模块、节点旁路和多输出组合</li><li>Android Keystore 加密保存平台密钥，与任务记录分离</li><li>三猫工坊主页与统一的木质金边界面</li><li>ComfyUI API 工作流导入与模块化自动装配</li><li>素材上传、任务状态与返回前台恢复查询</li><li>图片 / 视频图鉴、收藏与参数复用</li><li>保留原有 Runway 动作迁移</li></ul><p class="muted">安装包在仓库 Releases 中下载；保持固定签名，可覆盖更新。暂未配置应用内自动更新源。</p><a class="wood-button" href="https://github.com/guqincheng95/comfyui_latula/releases" target="_blank" rel="noopener">下载安装包</a></section>
           </template>
           <footer class="page-footer">拉图 · 每一次灵感，都有归处 <span>v{{ DISPLAY_VERSION }}</span></footer>
         </main>

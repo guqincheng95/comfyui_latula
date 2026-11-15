@@ -67,7 +67,9 @@ def wait_text(text):
             if js("Boolean(document.body?.innerText?.includes(" + json.dumps(text) + "))"):
                 print('UI ready:', text, flush=True)
                 return
-        except (AssertionError, websocket.WebSocketException):
+        except websocket.WebSocketException:
+            attach()
+        except AssertionError:
             pass
         time.sleep(0.25)
     raise AssertionError('UI timeout: ' + text + '; page=' + str(js('document.body?.innerText')))
@@ -106,7 +108,7 @@ try:
     wait_text('进入工作流')
     click('进入工作流')
     wait_text('参考图片')
-    field('正向提示词CLIPTextEncode', 'Android 原生网络协议验证')
+    field('正向提示词', 'Android 原生网络协议验证')
     js("(()=>{const input=document.querySelector('input[type=file][aria-label=\"参考图片\"]');const d=new DataTransfer();d.items.add(new File(['<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><rect width=\"64\" height=\"64\" fill=\"gold\"/></svg>'],'native-reference.svg',{type:'image/svg+xml'}));input.files=d.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()")
     screenshot('03-workbench-installed')
     click('提交工作流')
@@ -165,12 +167,12 @@ try:
     click('保存并装配');wait_text('进入工作流');click('进入工作流');wait_text('运行模块')
     js("document.querySelector('[data-output-id=\"10\"] > button').click()")
     wait_text('正向提示词')
-    field('正向提示词CLIPTextEncode','RunningHub Android 通用装配验证')
+    field('正向提示词','RunningHub Android 通用装配验证')
     def choose_image(label,name):
         js("""(async()=>{const input=document.querySelector('input[type=file][aria-label=' + JSON.stringify(%s) + ']');const canvas=document.createElement('canvas');canvas.width=canvas.height=64;const c=canvas.getContext('2d');c.fillStyle='#d4a45f';c.fillRect(0,0,64,64);const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));const d=new DataTransfer();d.items.add(new File([blob],%s,{type:'image/png'}));input.files=d.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()""" % (json.dumps(label),json.dumps(name)))
     choose_image('参考图片','reference.png');choose_image('批量添加参考图','reference-2.png')
     js("document.querySelector('[data-output-id=\"91\"] > button').click()")
-    wait_text('LoadImageGoohai');choose_image('参考图片','inactive.png')
+    wait_text('当前功能沿用工作流内置提示');choose_image('参考图片','inactive.png')
     js("document.querySelector('[data-output-id=\"10\"] > button').click()")
     wait_text('正向提示词')
     assert js("document.querySelector('textarea').value")=='RunningHub Android 通用装配验证'
@@ -180,7 +182,14 @@ try:
     def select_field(field_id,value):
         js("(()=>{const s=document.getElementById("+json.dumps('field-'+field_id)+");s.value="+json.dumps(value)+";s.dispatchEvent(new Event('change',{bubbles:true}))})()")
     select_field('4::sampler_name','dpmpp_2m')
-    js("[...document.querySelectorAll('details')].find(d=>d.querySelector('summary')?.textContent.includes('高级参数')).open=true")
+    assert js("document.querySelectorAll('.operation-module').length")==4
+    assert js("document.getElementById('field-9::ckpt_name')===null")
+    js("document.querySelector('.advanced-modules').open=true")
+    wait_text('节点 9 ·')
+    js("document.querySelector('.advanced-node[data-node-id=\"9\"]').open=true")
+    for _ in range(40):
+        if js("document.getElementById('field-9::ckpt_name')!==null"):break
+        time.sleep(0.1)
     select_field('9::ckpt_name','fixture-alternative.safetensors')
     screenshot('06-generic-workbench')
     click('画遮罩');wait_text('遮罩画板')
