@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "alias": "latula-release-v1",
+  "keyAlgorithm": "RSA-4096",
+  "certificateSha256": "0f4fb840edb338a6ab9ef17c0a5bdb037f43271eba204017ee7149c23d4c1724",
+  "validFrom": "2026-11-15T02:02:42+00:00",
+  "validUntil": "2056-11-07T02:02:42+00:00",
+  "applicationId": "com.latula.mobile",
+  "previousApplicationId": "com.acttwomobile.app",
+  "previousCertificateSha256": "da681f29d93cdbaf1c781447e7a7c133122e601cbd9bffadf8bd226a1e4aa5b5",
+  "transition": "side-by-side; original 0.01 private key was not persisted"
+}

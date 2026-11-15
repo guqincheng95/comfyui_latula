@@ -1,14 +1,16 @@
 # 拉图 · comfyui_latula
 
-版本 **0.01 初航测试版**（npm 版本 0.0.1，Android versionCode 301）。
+版本 **0.01.1 维护测试版**（npm 版本 0.0.2，Android versionCode 302）。
 
-**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.01/latula-v0.01-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.01)
+**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.01.1/latula-v0.01.1-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.01.1)
 
 手机安装请下载 `.apk` 文件；发布页中的 Source code 是源码压缩包。
 
+正式包名固定为 `com.latula.mobile`，证书指纹已固定在 `.github/signing/identity.json`。从 0.01.1 开始使用长期统一签名；旧 0.01 原型的私钥未能保存，不再处理其兼容，新旧包数据独立。
+
 拉图是 ComfyUI / AI API 的便捷操作前端。模型推理和图片、视频生成在用户连接的电脑或云端服务中完成。
 
-## 0.01 已实现
+## 已实现
 
 - 使用定稿的夜景三猫港湾主页；三个入口与内部页面统一深色木质、金边与冷暖像素美术。
 - 导入 ComfyUI **API 格式 JSON**，自动识别提示词、图片/视频/音频、数值、下拉和开关输入。
@@ -39,7 +41,7 @@
 - 取消只作用于原生 ComfyUI 中尚未开始的指定排队任务，不调用全局中断。
 - 原文件链接可能失效，重要作品请主动保存。卸载应用会清除本地记录。
 - 原生下载通过文件传输插件取得原文件后打开系统分享/保存面板；网页用浏览器下载。视频封面在网络/媒体跨域允许时缓存第一帧，否则保留可识别的预览占位。
-- 测试包保留原 applicationId com.acttwomobile.app。CI 从本版开始缓存测试签名；旧原型包由不同临时签名构建时，可能无法直接覆盖安装。
+- 后续构建必须配置固定签名 Secret `LATULA_ANDROID_SIGNING`，校验证书指纹后才产出 APK。缺少配置时不回退到随机测试签名；详见 [Android 签名配置](docs/ANDROID_SIGNING.md)。
 
 ## 开发与检查
 
@@ -64,6 +66,7 @@ Android：GitHub Actions 自动安装依赖、检查、生成原生项目、同�
 
 ## 项目文档
 
+- [固定签名与自动构建配置](docs/ANDROID_SIGNING.md)
 - [0.01 测试说明](docs/RELEASE_0.01.md)
 - [第一阶段规格](docs/PHASE1_SPEC.md)
 - [UI 设计计划](docs/UI_DESIGN_PLAN.md)

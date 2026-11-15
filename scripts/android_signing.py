@@ -35,6 +35,7 @@ def materialize(data,directory):
     return data
 
 def bootstrap(a):
+    assert not (ROOT/'.github/signing/identity.json').exists(),'A permanent identity is already pinned; use the saved Secret/backup instead of creating a new key'
     d=Path(a.directory);d.mkdir(parents=True,exist_ok=True)
     assert not (d/'release.p12').exists(),'Refusing to replace an existing release key'
     password=secrets.token_urlsafe(40)

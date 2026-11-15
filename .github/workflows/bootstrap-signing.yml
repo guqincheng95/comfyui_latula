@@ -1,8 +1,5 @@
 name: Establish permanent Android signing
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/bootstrap-signing.yml', 'scripts/android_signing.py']
   workflow_dispatch:
 permissions:
   contents: read
