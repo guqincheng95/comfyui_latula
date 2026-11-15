@@ -126,7 +126,7 @@ export function assembleGraphUI(graph, server = {}, previous = [], canvas = {}) 
       }
       visit(value)
     }
-    const imagePorts = Object.entries(definition).filter(([, d]) => d?.[0] === 'IMAGE')
+    const imagePorts = Object.entries(definition).filter(([, d]) => d?.[0] === 'IMAGE').sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
     function mediaSources(source, seen = new Set()) {
       if (seen.has(source) || !graph[source]) return []
       seen.add(source)
@@ -144,8 +144,11 @@ export function assembleGraphUI(graph, server = {}, previous = [], canvas = {}) 
     }
     for (const [name, type] of Object.entries(definition)) if (type?.[0] === 'MASK' && !isLink(node.inputs[name], graph)) {
       const firstImage = imagePorts.find(([key]) => isLink(node.inputs[key], graph))
-      const source = firstImage ? mediaSources(String(node.inputs[firstImage[0]][0]))[0] : null
-      result.fields.push({ id: id + '::' + name, nodeId: id, name, label: '遮罩 · ' + name, nodeTitle: node._meta?.title || node.class_type, kind: 'image', default: '', enabled: true, advanced: false, virtualMask: true, maskReference: source?.id || (imagePorts[0] ? id + '::' + imagePorts[0][0] : undefined), optional: !schema.input.required?.[name] })
+      // A transformed intermediate image may have different geometry. Do not paint
+      // on an upstream original and silently assume its mask coordinates still match.
+      const source = firstImage ? result.fields.find(f => f.nodeId === String(node.inputs[firstImage[0]][0]) && f.kind === 'image' && !f.virtualImage) : null
+      const reference = source?.id || (!firstImage && imagePorts[0] ? id + '::' + imagePorts[0][0] : undefined)
+      result.fields.push({ id: id + '::' + name, nodeId: id, name, label: '遮罩 · ' + name, nodeTitle: node._meta?.title || node.class_type, kind: 'image', default: '', enabled: true, advanced: !reference, virtualMask: true, maskReference: reference, maskWarning: reference ? undefined : '参考图来自中间处理节点，请上传与该端口对应尺寸和坐标的遮罩；不会对上游原图猜测位置。', optional: !schema.input.required?.[name] })
     }
     for (const field of result.fields.filter(f => f.nodeId === id)) {
       const optionSource = definition[field.name]?.[1]?.optionSource

@@ -300,11 +300,11 @@ async function generate() {
       workflow.fields = workflow.fields.map(field => ({ ...field, ...Object.fromEntries(Object.entries(assembled.fields.find(item => item.id === field.id) || {}).filter(([key]) => ['min','max','step','options'].includes(key))) }))
       validateValues(workflow.fields, input, selectedFiles)
     }
-    if (workflow.fields.some(field => field.virtualImage && selectedFiles[field.id])) {
+    if (workflow.fields.some(field => (field.virtualImage || field.virtualMask) && selectedFiles[field.id])) {
       const info = workflow.provider === 'comfy' ? connection.objectInfo : workflow.objectInfo
-      for (const field of workflow.fields.filter(f => f.virtualImage && selectedFiles[f.id])) {
+      for (const field of workflow.fields.filter(f => (f.virtualImage || f.virtualMask) && selectedFiles[f.id])) {
         const schema = info?.[workflow.graph[field.nodeId].class_type], definition = { ...schema?.input?.required, ...schema?.input?.optional }
-        if (!definition[field.name] && !(field.name.startsWith('images.') && definition.images)) throw new Error('新增参考图端口需要服务端定义确认，请先同步或导入节点定义')
+        if (!definition[field.name] && !(field.name.startsWith('images.') && definition.images)) throw new Error('新增图像或遮罩端口需要服务端定义确认，请先同步或导入节点定义')
       }
     }
     task = reactive({ id: uid(), remoteId: '', workflow, values: input, fileNames: Object.fromEntries(Object.entries(selectedFiles).filter(([,file]) => file).map(([id,file]) => [id,file.name])), status: 'UPLOADING', detail: '准备素材', outputs: [], favorite: false, createdAt: Date.now(), updatedAt: Date.now(), progress: null })

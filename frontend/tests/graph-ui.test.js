@@ -76,3 +76,15 @@ test('structured widget leaves preserve other values and model choices are hones
  assert.equal(compiled['1'].inputs.slot.on,false);assert.equal(compiled['1'].inputs.slot.strength,0.7)
  assert.deepEqual(ui.fields.find(f=>f.name==='slot'&&f.path?.[0]==='lora').options,['lora-a','lora-b'])
 })
+
+test('optional masks do not assume coordinates of a transformed upstream original',()=>{
+ const graph={
+ '1':{class_type:'LoadImage',inputs:{image:'source.png'}},
+ '2':{class_type:'UnknownCrop',inputs:{image:['1',0]}},
+ '3':{class_type:'UnknownEdit',inputs:{image:['2',0]}},
+ '4':{class_type:'SaveImage',inputs:{images:['3',0]}}
+ }
+ const metadata={UnknownCrop:{input:{required:{image:['IMAGE']}},output:['IMAGE']},UnknownEdit:{input:{required:{image:['IMAGE']},optional:{mask:['MASK']}},output:['IMAGE']}}
+ const ui=assembleGraphUI(graph,metadata),mask=ui.fields.find(f=>f.id==='3::mask')
+ assert.equal(mask.virtualMask,true);assert.equal(mask.maskReference,undefined);assert.equal(mask.advanced,true);assert.match(mask.maskWarning,/中间处理/)
+})

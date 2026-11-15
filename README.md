@@ -1,8 +1,8 @@
 # 拉图 · comfyui_latula
 
-版本 **0.03 通用装配测试版**（npm 版本 0.0.4，Android versionCode 305）。
+版本 **0.03.1 通用装配测试版**（npm 版本 0.0.4，Android versionCode 306）。
 
-**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.03/latula-v0.03-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.03)
+**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.03.1/latula-v0.03.1-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.03.1)
 
 手机安装请下载 `.apk` 文件；发布页中的 Source code 是源码压缩包。
 

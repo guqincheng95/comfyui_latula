@@ -16,6 +16,7 @@ defineEmits(['update:modelValue', 'file', 'mask', 'clearMask'])
     <small v-if="field.optionSource">{{ field.optionSource }}</small>
     <small v-if="field.optionMissing">导入值未出现在当前服务的选项中，请核对模型是否可用。</small>
     <div v-if="field.maskSlot !== undefined" class="mask-tools"><button class="wood-button small" :disabled="disabled || !file" @click="$emit('mask')">{{ mask ? '编辑遮罩' : '画遮罩' }}</button><button v-if="mask" class="text-button" :disabled="disabled" @click="$emit('clearMask')">移除遮罩</button><small>{{ mask ? '遮罩已就绪，将单独上传并连接 MASK 端口' : '选择原图后可涂抹局部修改区域' }}</small></div>
-    <button v-if="field.virtualMask" class="wood-button small" :disabled="disabled" @click="$emit('mask')">绘制此遮罩</button>
+    <small v-if="field.maskWarning">{{ field.maskWarning }}</small>
+    <button v-if="field.virtualMask && field.maskReference" class="wood-button small" :disabled="disabled" @click="$emit('mask')">绘制此遮罩</button>
   </div>
 </template>
