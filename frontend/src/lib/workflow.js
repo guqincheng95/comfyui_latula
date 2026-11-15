@@ -1,4 +1,4 @@
-export const DISPLAY_VERSION = '0.02'
+export const DISPLAY_VERSION = '0.03'
 export const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'INTERRUPTED'])
 export const STATUS = { UPLOADING: '上传中', SUBMITTING: '提交中', SUBMITTED: '已提交', PENDING: '排队中', RUNNING: '生成中', SUCCEEDED: '已完成', FAILED: '失败', CANCELED: '已取消', REVIEW: '提交状态待确认', INTERRUPTED: '上传已中断' }
 export const copy = value => JSON.parse(JSON.stringify(value))
@@ -81,6 +81,9 @@ export function assembleWorkflow(graph, objectInfo = null) {
       else if (type === 'INT' || type === 'FLOAT') kind = 'number'
       else if (type === 'BOOLEAN') kind = 'toggle'
       if (adapter?.file?.[name]) kind = adapter.file[name]
+      else if (opts.image_upload) kind = 'image'
+      else if (opts.video_upload) kind = 'video'
+      else if (opts.audio_upload) kind = 'audio'
       else if (typeof value === 'string' && (opts.multiline || /^(text|prompt|positive|negative|clip_l|t5xxl)$/.test(name) || (/TextEncode/.test(node.class_type) && /^(text_g|text_l)$/.test(name)) || (adapter?.multiline && /value|string/i.test(name)))) kind = 'textarea'
       const file = ['image', 'video', 'audio'].includes(kind)
       const role = roles[nodeId]
@@ -90,7 +93,10 @@ export function assembleWorkflow(graph, objectInfo = null) {
       const enabled = !(file && roots.length && !ancestors.has(nodeId))
       if (!enabled) warnings.push('素材节点「' + (node._meta?.title || node.class_type) + '」未连接到已识别的媒体输出，已默认停用此输入。可在模块调整中重新启用；原工作流节点保持不变。')
       const template = kind === 'textarea' && (/system.?prompt|固定提示词|系统提示词/i.test(node._meta?.title || '') || String(value).length > 2048)
-      fields.push({ id: nodeId + '::' + name, nodeId, name, label, nodeTitle: node._meta?.title || node.class_type, kind, default: value, enabled, advanced: template || !(file || kind === 'textarea' || common.has(name)), min: opts.min, max: opts.max, step: opts.step || (type === 'INT' || Number.isInteger(value) ? 1 : 0.01), options: kind === 'select' ? type.map(String) : undefined })
+      const options = kind === 'select' ? type.map(String) : undefined
+      const optionMissing = !!options && !options.includes(String(value))
+      if (optionMissing) options.unshift(String(value))
+      fields.push({ id: nodeId + '::' + name, nodeId, name, label, nodeTitle: node._meta?.title || node.class_type, kind, default: value, valueType: typeof value, enabled, advanced: template || !(file || kind === 'textarea' || common.has(name)), min: opts.min, max: opts.max, step: opts.step || (type === 'INT' || Number.isInteger(value) ? 1 : 0.01), options, optionMissing })
       count++
     }
     if (!count && !schema && !adapter && !/Save|Encode|Decode|Loader|Sampler|Latent|Conditioning|Model|ImageScale|Preview|showAnything|Comparer/.test(node.class_type)) warnings.push('节点 ' + (node._meta?.title || node.class_type) + ' 未发现可编辑的基础字段；特殊交互可能需要适配。')
@@ -102,9 +108,15 @@ export function defaults(fields) { return Object.fromEntries(fields.map(field =>
 export function materializeGraph(graph, fields, values, uploaded = {}) {
   const result = copy(graph)
   for (const field of fields) {
-    if (!result[field.nodeId] || !safeKey(field.name)) continue
+    if (field.virtualImage || field.virtualMask || !result[field.nodeId] || !safeKey(field.name)) continue
     const value = uploaded[field.id] ?? values[field.id] ?? field.default
-    result[field.nodeId].inputs[field.name] = value
+    if (field.path) {
+      let target = result[field.nodeId].inputs[field.name]
+      if (!target || typeof target !== 'object') continue
+      for (const part of field.path.slice(0, -1)) { if (!safeKey(part) || !target[part] || typeof target[part] !== 'object') { target = null; break }; target = target[part] }
+      const key = field.path.at(-1)
+      if (target && safeKey(key)) target[key] = value
+    } else result[field.nodeId].inputs[field.name] = value
   }
   return result
 }
@@ -113,7 +125,7 @@ export function validateValues(fields, values, files = {}) {
     if (field.enabled === false) continue
     const value = values[field.id] ?? field.default
     if (['image', 'video', 'audio'].includes(field.kind)) {
-      if (!files[field.id] && !String(value || '').trim()) throw new Error('请选择' + field.label)
+      if (!field.optional && !files[field.id] && !String(value || '').trim()) throw new Error('请选择' + field.label)
     } else if (field.kind === 'number') {
       if (value === '' || value === null || !Number.isFinite(Number(value))) throw new Error(field.label + '需要有效数字')
       if (['seed', 'noise_seed'].includes(field.name) && Number(value) === -1) continue

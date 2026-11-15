@@ -5,13 +5,16 @@ import { App as NativeApp } from '@capacitor/app'
 import { Haptics, ImpactStyle } from '@capacitor/haptics'
 import GameIcon from './components/GameIcon.vue'
 import WorkflowField from './components/WorkflowField.vue'
+import ReferenceInputs from './components/ReferenceInputs.vue'
+import MaskEditor from './components/MaskEditor.vue'
 import TaskThumb from './components/TaskThumb.vue'
 import { assembleWorkflow, copy, defaults, DISPLAY_VERSION, normalizeAddress, parseWorkflow, STATUS, TERMINAL, uid, validateValues } from './lib/workflow'
 import { loadConfig, saveConfig, loadTasks, saveTask, removeTask, clearThumbs } from './lib/storage'
-import { checkConnection, submitTask, queryTask, cancelTask } from './lib/api'
+import { checkConnection, submitTask, queryTask, cancelTask, readNodeDefinitions } from './lib/api'
 import { downloadOutput, clearNativeCache } from './lib/media'
 import { RUNNINGHUB_ORIGIN, runningHubId, outputBranches, assembleRunningHub, scopeGraph } from './lib/runninghub'
 import { getRunningHubKey, setRunningHubKey, clearRunningHubKey } from './lib/credentials'
+import { assembleGraphUI, nodeCatalog, compileGraph, runtimeOutputs, bypassLinks, parseCanvasMetadata } from './lib/graph-ui'
 
 const loaded = ref(false), fatal = ref('')
 const page = ref('home'), toast = ref(''), storageError = ref('')
@@ -24,16 +27,39 @@ const exitOpen = ref(false), confirmRemove = ref(null)
 const reload = () => window.location.reload()
 const characterMode = ref('image')
 const apiKeyInput = ref(''), keySaved = ref(false)
+const maskEditing = ref(null), syncing = ref(false)
+const maskBaseFile = computed(() => maskEditing.value ? files[maskEditing.value.virtualMask ? maskEditing.value.maskReference : maskEditing.value.id] : null)
 const draftBranches = computed(() => outputBranches(draft.value?.graph))
 const providerName = workflow => ({ comfy: 'ComfyUI', runninghub: 'RunningHub', runway: 'Runway' })[workflow.provider] || workflow.provider
 const types = ['textarea','image','video','audio','number','select','toggle','text']
 let toastTimer, saveTimer, pollTimer, polling = false, backListener, stateListener, restoreSuppressed = false
 const active = computed(() => config.workflows.find(workflow => workflow.id === config.activeId))
+const catalog = computed(() => active.value?.graph ? nodeCatalog(active.value.graph, active.value.objectInfo) : {})
+const modules = computed(() => active.value?.graph ? runtimeOutputs(active.value.graph, catalog.value, active.value.canvas) : [])
+const projection = computed(() => {
+  const workflow = active.value
+  if (!workflow?.runtime) return { visible: new Set((workflow?.fields || []).map(f => f.nodeId)), error: '' }
+  try { return { ...compileGraph(workflow.graph, workflow.fields, values, workflow.runtime, catalog.value, workflow.canvas), error: '' } }
+  catch (error) { return { visible: new Set(), error: error.message } }
+})
+const visibleFields = computed(() => (active.value?.fields || []).filter(f => f.enabled !== false && (!active.value?.runtime || (projection.value.visible.has(f.nodeId) && active.value.runtime.nodeModes?.[f.nodeId] !== 'bypass'))))
+const referenceGroups = computed(() => [...new Set(visibleFields.value.filter(f => f.mediaGroup && !f.advanced).map(f => f.mediaGroup))].map(id => ({ id, fields: visibleFields.value.filter(f => f.mediaGroup === id && !f.advanced) })))
+const runtimeNodes = computed(() => {
+  const workflow = active.value
+  if (!workflow?.runtime || !workflow.runtime.outputs.length) return []
+  let visible
+  try { visible = compileGraph(workflow.graph, workflow.fields, values, { ...workflow.runtime, nodeModes: {} }, catalog.value, workflow.canvas).visible } catch { return [] }
+  return [...visible].filter(id => !modules.value.some(m => m.id === id)).map(id => {
+    let canBypass = true
+    try { bypassLinks(workflow.graph, id, catalog.value, workflow.canvas) } catch { canBypass = false }
+    return { id, label: workflow.graph[id]._meta?.title || workflow.graph[id].class_type, canBypass }
+  })
+})
 const activeCount = computed(() => tasks.value.filter(task => task.remoteId && !TERMINAL.has(task.status)).length)
 const latestTask = computed(() => tasks.value.find(task => task.workflow.id === active.value?.id))
 const selectedTask = computed(() => tasks.value.find(task => task.id === selectedTaskId.value))
-const mainFields = computed(() => (active.value?.fields || []).filter(field => !field.advanced && field.enabled !== false).map(field => active.value?.provider === 'runway' && field.id === 'character' ? { ...field, kind: characterMode.value } : field))
-const extraFields = computed(() => (active.value?.fields || []).filter(field => field.advanced && field.enabled !== false))
+const mainFields = computed(() => visibleFields.value.filter(field => !field.advanced && !field.mediaGroup).map(field => active.value?.provider === 'runway' && field.id === 'character' ? { ...field, kind: characterMode.value } : field))
+const extraFields = computed(() => visibleFields.value.filter(field => field.advanced))
 const pageTitle = computed(() => ({ assemble: '装配工作流', workbench: active.value?.name || '工作流工坊', history: selectedTask.value ? '作品详情' : '历史图鉴', settings: '旅途设置', about: '关于拉图', updates: '更新手札' })[page.value])
 const filteredTasks = computed(() => tasks.value.filter(task => {
   if (favoriteOnly.value && !task.favorite) return false
@@ -67,6 +93,7 @@ function go(target) {
   nextTick(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' }))
 }
 function back() {
+  if (maskEditing.value) { maskEditing.value = null; return }
   if (exitOpen.value) { exitOpen.value = false; return }
   if (confirmRemove.value) { confirmRemove.value = null; return }
   if (selectedTaskId.value) { selectedTaskId.value = ''; return }
@@ -76,7 +103,7 @@ function back() {
 }
 function newWorkflow(provider = 'comfy') {
   draft.value = { id: uid(), name: provider === 'comfy' ? '我的 ComfyUI 工作流' : 'Runway 动作迁移', provider, address: provider === 'runway' ? localStorage.getItem('actTwoBackendUrl') || '' : '', fields: provider === 'runway' ? copy(runwayFields) : [], graph: null, warnings: [], missing: [], connection: 'unchecked', updatedAt: Date.now() }
-  if (provider === 'runninghub') Object.assign(draft.value, { name: '我的 RunningHub 工作流', address: RUNNINGHUB_ORIGIN, workflowId: '2121823324379631618', outputId: '', branchNames: {}, instanceType: 'default' })
+  if (provider === 'runninghub') Object.assign(draft.value, { name: '我的 RunningHub 工作流', address: RUNNINGHUB_ORIGIN, workflowId: '', outputId: '', branchNames: {}, instanceType: 'default' })
   tap()
 }
 async function saveKey(quiet = false) {
@@ -96,13 +123,61 @@ function normalizeWorkflow(workflow) {
   } else workflow.address = normalizeAddress(workflow.address, { allowLoopback: !Capacitor.isNativePlatform() })
 }
 function installGraph(workflow, graph) {
+  const old = workflow.graph
+  if (old && workflow.runtime) workflow.runtime.nodeModes = Object.fromEntries(Object.entries(workflow.runtime.nodeModes || {}).filter(([id]) => old[id]?.class_type === graph[id]?.class_type))
   workflow.graph = graph
-  if (workflow.provider === 'runninghub') {
-    const branches = outputBranches(graph)
-    if (!branches.some(branch => branch.id === workflow.outputId)) workflow.outputId = branches.length === 1 ? branches[0].id : ''
-    Object.assign(workflow, assembleRunningHub(graph, workflow.outputId, workflow.fields))
-  } else Object.assign(workflow, assembleWorkflow(graph))
+  rebuild(workflow)
   workflow.connection = 'unchecked'
+}
+function rebuild(workflow) {
+  if (!workflow.graph) return
+  const result = assembleGraphUI(workflow.graph, workflow.objectInfo, workflow.fields, workflow.canvas)
+  delete result.catalog
+  Object.assign(workflow, result)
+  workflow.branchNames ||= {}
+  const roots = runtimeOutputs(workflow.graph, nodeCatalog(workflow.graph, workflow.objectInfo), workflow.canvas).map(m => m.id)
+  workflow.runtime ||= { outputs: workflow.outputId ? [workflow.outputId] : workflow.provider === 'comfy' ? roots : [], nodeModes: {} }
+  workflow.runtime.outputs = workflow.runtime.outputs.filter(id => roots.includes(id)); workflow.runtime.nodeModes ||= {}
+  for (const [id, metadata] of Object.entries(workflow.canvas?.nodes || {})) if (workflow.graph[id] && !workflow.runtime.nodeModes[id]) {
+    if (metadata.mode === 4) workflow.runtime.nodeModes[id] = 'bypass'
+    if (metadata.mode === 2) workflow.runtime.nodeModes[id] = 'muted'
+  }
+}
+function activateModule(id) { if (busy.value) return; active.value.runtime.outputs = [id]; persist(); tap() }
+function toggleModule(id, enabled) {
+  if (busy.value) return
+  active.value.runtime.outputs = enabled ? [...new Set([...active.value.runtime.outputs, id])] : active.value.runtime.outputs.filter(value => value !== id)
+  persist()
+}
+async function syncDefinitions(workflow = active.value) {
+  if (!workflow?.graph || syncing.value) return
+  syncing.value = true
+  try {
+    if (workflow.provider === 'runninghub') await saveKey(true)
+    workflow.objectInfo = await readNodeDefinitions(workflow); rebuild(workflow)
+    if (workflow === active.value) for (const field of workflow.fields) if (!(field.id in values)) values[field.id] = field.default
+    if (!draft.value) await persist()
+    notify('控件定义已同步：下拉选项、端口和数值范围已更新')
+  } catch (error) { notify(error.message) } finally { syncing.value = false }
+}
+async function importDefinitions(event, canvas = false) {
+  const file = event.target.files?.[0], workflow = draft.value || active.value
+  if (!file || !workflow) return
+  try {
+    if (file.size > 20 * 1024 * 1024) throw new Error('控件定义文件超过 20 MB')
+    const raw = JSON.parse(await file.text())
+    if (canvas) workflow.canvas = parseCanvasMetadata(raw)
+    else {
+      const info = raw.object_info || raw.objectInfo || raw
+      if (!Object.values(info).some(v => v?.input)) throw new Error('请选择服务端 object_info 节点定义 JSON')
+      const classes = new Set(Object.values(workflow.graph || {}).map(n => n.class_type)); classes.add('LoadImage'); classes.add('LoadImageMask')
+      workflow.objectInfo = Object.fromEntries(Object.entries(info).filter(([name]) => classes.has(name)))
+    }
+    rebuild(workflow)
+    if (workflow === active.value) for (const field of workflow.fields) if (!(field.id in values)) values[field.id] = field.default
+    if (!draft.value) await persist()
+    notify(canvas ? '已读取画布分组和端口信息' : '已按节点定义重新装配全部控件')
+  } catch (error) { notify(error.message) } finally { event.target.value = '' }
 }
 function selectOutput() {
   if (!draft.value?.graph) return
@@ -129,11 +204,11 @@ async function test(workflow) {
     const result = await checkConnection(workflow)
     if (workflow.provider === 'runninghub') installGraph(workflow, result.graph)
     if (workflow.provider === 'comfy' && workflow.graph) {
-      const assembled = assembleWorkflow(workflow.graph, result.objectInfo)
-      const previous = new Map(workflow.fields.map(field => [field.id, field]))
-      assembled.fields = assembled.fields.map(field => { const saved = previous.get(field.id); return saved ? { ...field, label: saved.label, enabled: saved.enabled ?? field.enabled, advanced: saved.advanced, kind: saved.customKind ? saved.kind : field.kind, customKind: saved.customKind } : field })
-      Object.assign(workflow, assembled)
-      if (assembled.missing.length) throw new Error('服务已连通，但缺少工作流节点：' + assembled.missing.join('、'))
+      workflow.objectInfo = result.objectInfo; rebuild(workflow)
+    }
+    if (workflow.provider === 'runninghub') {
+      try { workflow.objectInfo = await readNodeDefinitions(workflow); rebuild(workflow) }
+      catch { workflow.warnings.unshift('平台完整控件定义尚未取得：模型下拉仅含工作流已有值。可同步或导入节点定义；API JSON 不包含完整选项。') }
     }
     workflow.connection = 'ready'; workflow.checkedAddress = workflow.address; workflow.checkedWorkflowId = workflow.workflowId
     if (workflow.provider === 'runway') workflow.characterVideo = result.health?.characterVideo === 'enabled'
@@ -148,7 +223,6 @@ async function saveWorkflow(equip = true) {
     normalizeWorkflow(workflow)
     if (workflow.provider === 'runninghub') {
       if (!workflow.graph) throw new Error('请导入 API JSON 或点击读取云端工作流')
-      scopeGraph(workflow.graph, workflow.outputId)
       if (apiKeyInput.value.trim()) await saveKey(true)
     }
     if (!workflow.name.trim()) throw new Error('请输入工作流名称')
@@ -186,7 +260,14 @@ watch(values, () => {
 function chooseFile(field, file) {
   if (file && file.size > 200 * 1024 * 1024) { notify('0.01 单个素材暂限 200 MB'); return }
   files[field.id] = file
+  delete files[field.id + '::$mask']; delete values[field.id + '::$mask']
 }
+function openMask(field) {
+  if (files[field.virtualMask ? field.maskReference : field.id]) maskEditing.value = field
+  else notify('请先选择此遮罩对应的原图，再打开画板')
+}
+function saveMask(file) { files[maskEditing.value.id + (maskEditing.value.virtualMask ? '' : '::$mask')] = file; maskEditing.value = null; notify('遮罩已保存；提交时单独上传并接入 MASK 连线') }
+function clearMask(field) { delete files[field.id + '::$mask']; delete values[field.id + '::$mask'] }
 async function patch(task, change) {
   Object.assign(task, change, { updatedAt: Date.now() })
   try { await saveTask(copy(task)) } catch { storageError.value = '任务记录未能保存，请检查设备存储空间并保留服务端任务编号。' }
@@ -200,18 +281,31 @@ async function generate() {
     normalizeWorkflow(workflow)
     if (workflow.provider === 'runninghub') {
       await saveKey(true)
-      scopeGraph(workflow.graph, workflow.outputId)
+    }
+    if (workflow.runtime) {
+      if (projection.value.error) throw new Error(projection.value.error)
+      workflow.fields = copy(visibleFields.value)
+      const permitted = new Set(workflow.fields.flatMap(field => [field.id, field.id + '::$mask']))
+      for (const id of Object.keys(selectedFiles)) if (!permitted.has(id)) delete selectedFiles[id]
     }
     validateValues(workflow.fields.filter(field => field.enabled !== false), input, selectedFiles)
     if (workflow.provider === 'runway' && (!selectedFiles.character || !selectedFiles.reference)) throw new Error('请重新选择角色素材和动作视频')
     notify('正在检查服务连接…')
     const connection = await checkConnection(workflow)
     if (workflow.provider === 'comfy') {
-      const assembled = assembleWorkflow(workflow.graph, connection.objectInfo)
+      const executable = workflow.runtime ? compileGraph(workflow.graph, workflow.fields, input, workflow.runtime, nodeCatalog(workflow.graph, connection.objectInfo), workflow.canvas).graph : workflow.graph
+      const assembled = assembleWorkflow(executable, connection.objectInfo)
       if (assembled.missing.length) throw new Error('服务缺少节点：' + assembled.missing.join('、'))
       // Keep user labels/kinds but apply authoritative numerical limits/options.
       workflow.fields = workflow.fields.map(field => ({ ...field, ...Object.fromEntries(Object.entries(assembled.fields.find(item => item.id === field.id) || {}).filter(([key]) => ['min','max','step','options'].includes(key))) }))
       validateValues(workflow.fields, input, selectedFiles)
+    }
+    if (workflow.fields.some(field => field.virtualImage && selectedFiles[field.id])) {
+      const info = workflow.provider === 'comfy' ? connection.objectInfo : workflow.objectInfo
+      for (const field of workflow.fields.filter(f => f.virtualImage && selectedFiles[f.id])) {
+        const schema = info?.[workflow.graph[field.nodeId].class_type], definition = { ...schema?.input?.required, ...schema?.input?.optional }
+        if (!definition[field.name] && !(field.name.startsWith('images.') && definition.images)) throw new Error('新增参考图端口需要服务端定义确认，请先同步或导入节点定义')
+      }
     }
     task = reactive({ id: uid(), remoteId: '', workflow, values: input, fileNames: Object.fromEntries(Object.entries(selectedFiles).filter(([,file]) => file).map(([id,file]) => [id,file.name])), status: 'UPLOADING', detail: '准备素材', outputs: [], favorite: false, createdAt: Date.now(), updatedAt: Date.now(), progress: null })
     await saveTask(copy(task)); tasks.value.unshift(task)
@@ -242,10 +336,12 @@ function openTask(task) { page.value = 'history'; selectedTaskId.value = task.id
 async function reuse(task) {
   let workflow = config.workflows.find(item => item.id === task.workflow.id)
   if (!workflow) { workflow = copy(task.workflow); config.workflows.push(workflow) }
+  if (task.workflow.runtime) workflow.runtime = copy(task.workflow.runtime)
+  if (workflow.graph) rebuild(workflow)
   config.activeId = workflow.id
-  config.drafts[workflow.id] = copy(task.values)
+  config.drafts[workflow.id] = { ...(config.drafts[workflow.id] || {}), ...copy(task.values) }
   await persist()
-  Object.keys(values).forEach(key => delete values[key]); Object.assign(values, defaults(workflow.fields), task.values)
+  Object.keys(values).forEach(key => delete values[key]); Object.assign(values, defaults(workflow.fields), config.drafts[workflow.id])
   Object.keys(files).forEach(key => delete files[key])
   go('workbench')
   notify('已带回参数。请核对素材后手动提交，不会自动生成。')
@@ -291,6 +387,7 @@ onMounted(async () => {
     const saved = await loadConfig()
     try { apiKeyInput.value = await getRunningHubKey(); keySaved.value = !!apiKeyInput.value } catch { notify('请在设置中清除后重新填写 RunningHub 密钥') }
     Object.assign(config, saved, { settings: { reducedMotion: false, haptics: true, ...saved.settings } })
+    for (const workflow of config.workflows) if (workflow.graph) rebuild(workflow)
     tasks.value = (await loadTasks()).sort((a,b) => b.createdAt - a.createdAt)
     // Preserve the previous prototype's active task and backend setting.
     const legacy = JSON.parse(localStorage.getItem('actTwoActiveTask') || 'null')
@@ -356,18 +453,14 @@ onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearT
               <div class="field-group"><label for="workflow-name">工作流名称</label><input id="workflow-name" v-model="draft.name" maxlength="60" /></div>
               <div v-if="draft.provider !== 'runninghub'" class="field-group"><label for="workflow-address">{{ draft.provider === 'comfy' ? 'ComfyUI 服务地址' : 'Runway 后端地址' }}</label><input id="workflow-address" v-model="draft.address" placeholder="例如 http://192.168.1.8:8188" inputmode="url" /><small>填写电脑局域网 IP 或云端域名。手机里的 127.0.0.1 指手机自身；电脑通常需开启局域网监听。</small></div>
               <template v-if="draft.provider === 'runninghub'">
-                <p class="muted">RunningHub · 官方平台 API。只提交下方选中的分支，由云端生成。</p>
+                <p class="muted">RunningHub · 官方平台 API。保留完整工作流，在运行页控制执行路径。</p>
                 <div class="field-group"><label for="runninghub-workflow">工作流链接或 ID</label><input id="runninghub-workflow" v-model="draft.workflowId" inputmode="url" placeholder="https://www.runninghub.cn/workflow/数字ID" /><small>支持完整网页链接，自动去除来源参数。接口域名固定为 www.runninghub.cn。</small></div>
                 <div class="field-group"><label for="runninghub-key">RunningHub API Key</label><input id="runninghub-key" type="password" v-model="apiKeyInput" autocomplete="off" autocapitalize="off" spellcheck="false" @input="keySaved = false" placeholder="填写你自己的 API Key" /><small>{{ Capacitor.isNativePlatform() ? '使用 Android Keystore 加密保存；不会写入工作流和任务记录。' : '网页预览仅在当前会话保存密钥，刷新后需要重填。' }}</small><button class="text-button" @click="saveKeyButton">{{ keySaved ? '密钥已保存 · 更新密钥' : '保存密钥' }}</button></div>
                 <div class="field-group"><label for="runninghub-instance">运行规格</label><select id="runninghub-instance" v-model="draft.instanceType"><option value="default">标准 · 24G</option><option value="plus">Plus · 48G</option><option value="ultra">Ultra · 84G</option></select><small>规格影响平台用量；以你的账户可用规格和平台实际计费为准。</small></div>
               </template>
               <label v-if="draft.provider !== 'runway'" class="workflow-import"><GameIcon name="upload" :size="28" /><strong>{{ importing ? '正在识别…' : draft.graph ? '更换 API 工作流文件' : '选择 API 格式 JSON' }}</strong><small>从 ComfyUI 导出 API 格式，不是普通画布 JSON</small><input type="file" accept=".json,application/json" :disabled="importing" aria-label="导入 API 工作流文件" @change="importGraph" /></label>
-              <section v-if="draft.provider === 'runninghub' && draft.graph" class="branch-picker">
-                <div class="field-group"><label for="runninghub-output">本次执行的输出分支</label><select id="runninghub-output" v-model="draft.outputId" @change="selectOutput"><option disabled value="">请选择一个输出分支</option><option v-for="branch in draftBranches" :key="branch.id" :value="branch.id">{{ draft.branchNames?.[branch.id] || branch.label }}</option></select><small>{{ draftBranches.length }} 个输出入口。仅保留所选输出及依赖节点，原始 JSON 保留。网页分组开关不会自动转换为 API 模式。</small></div>
-                <div v-if="draft.outputId" class="field-group"><label for="branch-name">分支显示名称</label><input id="branch-name" v-model="draft.branchNames[draft.outputId]" placeholder="例如：图像编辑、扩图、重绘" maxlength="40" /></div>
-                <p v-if="!draftBranches.length" class="notice">未发现已支持的保存输出节点，请导出含 SaveImage / SaveVideo / SaveAudio 等输出的 API JSON。</p>
-                <p class="muted">自定义图片节点已识别 LoadImageGoohai；遮罩绘制尚未适配。此类分支需上传已含正确透明通道/遮罩语义的素材，并核对节点设置。不会在手机执行模型。</p>
-              </section>
+              <section v-if="draft.graph" class="branch-picker"><h3>完整工作流已装配</h3><p class="muted">功能切换、模块启停和节点旁路统一放在运行页面。保存一份配置即可，不需要为每个功能复制工作流。</p></section>
+              <details v-if="draft.graph" class="parchment"><summary>控件与画布信息</summary><p class="muted">API JSON 通常不含完整选项和分组。服务端 object_info 提供类型/下拉/端口；普通画布 JSON 提供分组名称和端口信息，原执行图仍以 API JSON 为准。</p><button class="wood-button" :disabled="syncing" @click="syncDefinitions(draft)">{{ syncing ? '正在读取节点定义…' : '同步控件选项' }}</button><label class="metadata-import">导入节点定义<input type="file" accept=".json" aria-label="导入节点定义" @change="importDefinitions($event)" /></label><label class="metadata-import">补充画布分组信息<input type="file" accept=".json" aria-label="补充画布分组信息" @change="importDefinitions($event,true)" /></label></details>
               <div v-if="draft.graph" class="assembly-stats"><span>{{ draft.nodeCount }}<small>节点</small></span><span>{{ draft.fields.filter(f => f.enabled !== false && ['image','video','audio'].includes(f.kind)).length }}<small>素材输入</small></span><span>{{ draft.fields.filter(f => f.enabled !== false && f.kind === 'textarea').length }}<small>文本输入</small></span><span>{{ draft.fields.length }}<small>输入字段</small></span></div>
               <button class="wood-button wide" :disabled="testing || (draft.provider !== 'runninghub' && !draft.address)" @click="test(draft)"><GameIcon name="wifi" />{{ testing ? '正在连接与读取…' : draft.provider === 'runninghub' ? '验证密钥 · 读取云端工作流' : '测试连接 · 完善自动装配' }}</button>
               <div v-for="warning in draft.warnings" :key="warning" class="notice">{{ warning }}</div>
@@ -378,10 +471,16 @@ onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearT
 
           <template v-else-if="page === 'workbench'">
             <template v-if="active">
-              <section class="intro"><GameIcon name="book" :size="35" /><div><h2>{{ active.name }}</h2><p>{{ providerName(active) }} · {{ active.provider === 'runninghub' ? (active.branchNames?.[active.outputId] || '输出分支 ' + active.outputId) : '自动装配界面' }}</p></div><button class="icon-button" aria-label="编辑当前工作流" @click="edit(active); page = 'assemble'"><GameIcon name="gear" /></button></section>
-              <section v-if="active.provider === 'runninghub'" class="parchment"><div class="field-group"><label for="workbench-key">RunningHub API Key</label><input id="workbench-key" type="password" v-model="apiKeyInput" autocomplete="off" autocapitalize="off" spellcheck="false" @input="keySaved = false" placeholder="填写你自己的 API Key" /><small>{{ keySaved ? '本机密钥已就绪' : '提交前请填写密钥' }} · 工作流 {{ active.workflowId }}</small><button class="text-button" @click="saveKeyButton">保存密钥</button></div><p class="muted">提交将使用 RunningHub 账户额度。只运行所选分支；网络异常不会自动重新提交。</p></section>
-              <section class="parchment"><p class="muted">素材与参数将发送到你配置的服务。返回主页不会取消已接收的任务。</p><div v-if="active.provider === 'runway' && active.characterVideo" class="field-group"><label for="character-mode">角色素材类型</label><select id="character-mode" v-model="characterMode" :disabled="busy" @change="files.character = null"><option value="image">图片</option><option value="video">视频（只迁移表情）</option></select></div><WorkflowField v-for="field in mainFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :disabled="busy" @file="chooseFile(field, $event)" /><details v-if="extraFields.length" :open="advanced" @toggle="advanced = $event.target.open"><summary>高级参数 · {{ extraFields.length }} 项</summary><WorkflowField v-for="field in extraFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :disabled="busy" @file="chooseFile(field, $event)" /></details><div v-if="!active.fields.length" class="notice">没有识别到输入字段，可在装配台连接服务后读取节点定义。</div></section>
-              <button class="gold-button wide submit-button" :disabled="busy" @click="generate"><GameIcon name="play" />{{ busy ? '正在上传与提交…' : '提交工作流' }}</button>
+              <section class="intro"><GameIcon name="book" :size="35" /><div><h2>{{ active.name }}</h2><p>{{ providerName(active) }} · 一份工作流，自由切换执行模块</p></div><button class="icon-button" aria-label="编辑当前工作流" @click="edit(active); page = 'assemble'"><GameIcon name="gear" /></button></section>
+              <section v-if="active.runtime" class="parchment runtime-panel"><div class="section-heading"><div><h3>运行模块</h3><small>点击道具切换功能；勾选可组合输出。切换保留参数和已选素材。</small></div><GameIcon name="gear" /></div>
+                <div class="module-rack"><article v-for="module in modules" :key="module.id" :data-output-id="module.id" class="module-item" :class="{selected:active.runtime.outputs.includes(module.id)}"><button :disabled="busy" :aria-label="'切换模块 ' + (active.branchNames[module.id] || module.label)" :aria-pressed="active.runtime.outputs.includes(module.id)" @click="activateModule(module.id)"><span class="module-prop"><GameIcon name="book" :size="32" /></span><strong>{{ active.branchNames[module.id] || module.label }}</strong><small>{{ active.runtime.outputs.includes(module.id) ? '已启用' : '已停用' }}</small></button><label class="check-label"><input type="checkbox" :aria-label="'启用输出 ' + module.id" :checked="active.runtime.outputs.includes(module.id)" :disabled="busy" @change="toggleModule(module.id,$event.target.checked)" />参与运行</label></article></div>
+                <details><summary>模块命名与旁路控制</summary><div v-for="module in modules" :key="'name-'+module.id" class="field-group"><label :for="'module-name-'+module.id">{{ module.label }}</label><input :id="'module-name-'+module.id" v-model="active.branchNames[module.id]" :disabled="busy" placeholder="模块显示名称" @change="persist" /></div><div v-for="node in runtimeNodes" :key="node.id" class="node-state"><span>{{ node.label }}<small>节点 {{ node.id }}</small></span><select :aria-label="'节点 ' + node.id + '运行状态'" :value="active.runtime.nodeModes[node.id] || 'enabled'" :disabled="busy" @change="active.runtime.nodeModes[node.id] = $event.target.value; persist()"><option value="enabled">启用</option><option value="bypass" :disabled="!node.canBypass">{{ node.canBypass ? '旁路（透传连线）' : '旁路需完整端口定义' }}</option><option value="muted">停用</option></select></div><small>旁路会重接上游同类型端口；无法唯一匹配时不会猜测。停用被当前路径依赖的节点会阻止提交。</small></details>
+                <p v-if="projection.error" class="notice" role="alert">{{ projection.error }}</p>
+                <button class="text-button" :disabled="syncing || busy" @click="syncDefinitions()">{{ syncing ? '正在同步…' : '同步控件选项' }}</button>
+              </section>
+              <section v-if="active.provider === 'runninghub'" class="parchment"><div class="field-group"><label for="workbench-key">RunningHub API Key</label><input id="workbench-key" type="password" v-model="apiKeyInput" autocomplete="off" autocapitalize="off" spellcheck="false" @input="keySaved = false" placeholder="填写你自己的 API Key" /><small>{{ keySaved ? '本机密钥已就绪' : '提交前请填写密钥' }} · 工作流 {{ active.workflowId }}</small><button class="text-button" @click="saveKeyButton">保存密钥</button></div><p class="muted">提交将使用 RunningHub 账户额度。按当前启用/旁路状态提交执行图；网络异常不会自动重新提交。</p></section>
+              <section class="parchment"><p class="muted">素材与参数将发送到你配置的服务。返回主页不会取消已接收的任务。</p><div v-if="active.provider === 'runway' && active.characterVideo" class="field-group"><label for="character-mode">角色素材类型</label><select id="character-mode" v-model="characterMode" :disabled="busy" @change="files.character = null"><option value="image">图片</option><option value="video">视频（只迁移表情）</option></select></div><ReferenceInputs v-for="group in referenceGroups" :key="group.id" :fields="group.fields" :values="values" :files="files" :disabled="busy" @file="chooseFile" @value="(field,value) => values[field.id] = value" @mask="openMask" @clear-mask="clearMask" @notice="notify" /><WorkflowField v-for="field in mainFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :mask="files[field.id + '::$mask']" :disabled="busy" @file="chooseFile(field, $event)" @mask="openMask(field)" @clear-mask="clearMask(field)" /><details v-if="extraFields.length" :open="advanced" @toggle="advanced = $event.target.open"><summary>高级参数 · {{ extraFields.length }} 项</summary><WorkflowField v-for="field in extraFields" :key="field.id" :field="field" v-model="values[field.id]" :file="files[field.id]" :mask="files[field.id + '::$mask']" :disabled="busy" @file="chooseFile(field, $event)" @mask="openMask(field)" @clear-mask="clearMask(field)" /></details><div v-if="!active.fields.length" class="notice">没有识别到输入字段，可在装配台连接服务后读取节点定义。</div></section>
+              <button class="gold-button wide submit-button" :disabled="busy || !!projection.error" @click="generate"><GameIcon name="play" />{{ busy ? '正在上传与提交…' : '提交工作流' }}</button>
               <section v-if="latestTask" class="parchment task-progress" aria-live="polite"><div class="section-heading"><h3>{{ STATUS[latestTask.status] || latestTask.status }}</h3><button class="text-button" @click="openTask(latestTask)">查看任务</button></div><p>{{ latestTask.detail }}</p><progress v-if="latestTask.progress !== null && latestTask.progress !== undefined" :value="latestTask.progress" max="100"></progress><small>{{ latestTask.remoteId || '等待服务端任务编号' }}</small></section>
             </template><div v-else class="empty-state"><h2>还没有装配工作流</h2><button class="gold-button" @click="go('assemble')">前往装配</button></div>
           </template>
@@ -416,12 +515,12 @@ onBeforeUnmount(() => { clearTimeout(pollTimer); clearTimeout(saveTimer); clearT
             <section class="parchment"><h2>技术与美术</h2><p class="muted">Vue、Capacitor 及官方原生插件；ComfyUI 原生 API。参考 ComfyChair、ComfyUIMobileApp、Comfy Remote 的工作流与任务组织思路，本版未复制它们的源码。美术使用本项目确定的夜景三猫方案。</p><a href="/third-party-notices.txt" target="_blank" rel="noopener">查看第三方组件许可 ↗</a></section>
           </template>
           <template v-else-if="page === 'updates'">
-            <section class="parchment"><span class="badge">v{{ DISPLAY_VERSION }}</span><h2>月夜港湾 · 云端工坊</h2><ul><li>新增 RunningHub：链接识别、云端 JSON 读取、素材上传与任务结果</li><li>整合工作流选择单一输出分支，支持分支命名</li><li>Android Keystore 加密保存平台密钥，与任务记录分离</li><li>三猫工坊主页与统一的木质金边界面</li><li>ComfyUI API 工作流导入与模块化自动装配</li><li>素材上传、任务状态与返回前台恢复查询</li><li>图片 / 视频图鉴、收藏与参数复用</li><li>保留原有 Runway 动作迁移</li></ul><p class="muted">安装包在仓库 Releases 中下载；保持固定签名，可覆盖更新。暂未配置应用内自动更新源。</p><a class="wood-button" href="https://github.com/guqincheng95/comfyui_latula/releases" target="_blank" rel="noopener">下载安装包</a></section>
+            <section class="parchment"><span class="badge">v{{ DISPLAY_VERSION }}</span><h2>月夜港湾 · 云端工坊</h2><ul><li>新增通用装配引擎、节点定义驱动控件、多图参考与遮罩画板</li><li>完整工作流在运行页切换模块、节点旁路和多输出组合</li><li>Android Keystore 加密保存平台密钥，与任务记录分离</li><li>三猫工坊主页与统一的木质金边界面</li><li>ComfyUI API 工作流导入与模块化自动装配</li><li>素材上传、任务状态与返回前台恢复查询</li><li>图片 / 视频图鉴、收藏与参数复用</li><li>保留原有 Runway 动作迁移</li></ul><p class="muted">安装包在仓库 Releases 中下载；保持固定签名，可覆盖更新。暂未配置应用内自动更新源。</p><a class="wood-button" href="https://github.com/guqincheng95/comfyui_latula/releases" target="_blank" rel="noopener">下载安装包</a></section>
           </template>
           <footer class="page-footer">拉图 · 每一次灵感，都有归处 <span>v{{ DISPLAY_VERSION }}</span></footer>
         </main>
       </div>
-      <Transition name="toast"><div v-if="toast" class="toast" role="status">{{ toast }}</div></Transition>
+      <MaskEditor v-if="maskEditing" :file="maskBaseFile" :mask="files[maskEditing.id + (maskEditing.virtualMask ? '' : '::$mask')]" @save="saveMask" @close="maskEditing = null" /><Transition name="toast"><div v-if="toast" class="toast" role="status">{{ toast }}</div></Transition>
       <div v-if="exitOpen || confirmRemove" class="modal-scrim" @click.self="exitOpen = false; confirmRemove = null">
         <section class="parchment modal" role="dialog" aria-modal="true" :aria-label="exitOpen ? '离开拉图' : '移除确认'">
           <template v-if="exitOpen"><h2>暂别月夜港湾？</h2><p>已被服务接收的任务会继续执行，回来后会同步状态。</p><p v-if="busy" class="notice">素材上传或任务提交尚未完成，现在离开可能中断。请先等待任务编号返回。</p><div class="button-row"><button class="wood-button" @click="exitOpen = false">留在这里</button><button class="gold-button" :disabled="busy" @click="exit">暂时离开</button></div></template>

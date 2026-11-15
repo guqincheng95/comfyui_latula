@@ -1,4 +1,5 @@
 import { assembleWorkflow, copy, isLink, materializeGraph, resultKind } from './workflow.js'
+import { compileGraph, materializeMedia, nodeCatalog } from './graph-ui.js'
 
 export const RUNNINGHUB_ORIGIN = 'https://www.runninghub.cn'
 export function runningHubId(value) {
@@ -44,7 +45,7 @@ export function assembleRunningHub(graph, outputId, previous = []) {
   return result
 }
 export function runningHubBody(workflow, values, uploaded = {}) {
-  const graph = scopeGraph(workflow.graph, workflow.outputId)
+  let graph = workflow.runtime ? workflow.graph : scopeGraph(workflow.graph, workflow.outputId)
   const fields = workflow.fields.filter(field => field.enabled !== false && graph[field.nodeId])
   const finalValues = copy(values)
   for (const field of fields) {
@@ -52,7 +53,7 @@ export function runningHubBody(workflow, values, uploaded = {}) {
     if (field.kind === 'number') finalValues[field.id] = Number(value)
     if (['seed', 'noise_seed'].includes(field.name) && Number(value) === -1) finalValues[field.id] = Math.floor(Math.random() * 4294967295)
   }
-  const materialized = materializeGraph(graph, fields, finalValues, uploaded)
+  const materialized = workflow.runtime ? compileGraph(materializeMedia(graph, fields, finalValues, uploaded), fields, finalValues, workflow.runtime, nodeCatalog(graph, workflow.objectInfo), workflow.canvas, uploaded).graph : materializeGraph(graph, fields, finalValues, uploaded)
   // Explicit seeds prevent the platform from replacing a fixed seed. No connection arrays are sent as overrides.
   const nodeInfoList = []
   for (const [nodeId, node] of Object.entries(materialized)) for (const [fieldName, fieldValue] of Object.entries(node.inputs)) {

@@ -1,6 +1,8 @@
 import { comfyOutputs, copy, materializeGraph, parseWorkflow, resultKind, uid } from './workflow.js'
 import { RUNNINGHUB_ORIGIN, runningHubId, runningHubBody, runningHubResult } from './runninghub.js'
 import { getRunningHubKey } from './credentials.js'
+import { Capacitor, CapacitorHttp } from '@capacitor/core'
+import { compileGraph, materializeMedia, nodeCatalog } from './graph-ui.js'
 async function request(url, init = {}, timeout = 20000) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
@@ -35,6 +37,27 @@ export async function checkConnection(workflow) {
   if (health.status !== 'ok') throw new Error('后端健康检查未通过')
   return { health, note: 'Runway 后端已连接' }
 }
+export async function readNodeDefinitions(workflow) {
+  if (workflow.provider === 'comfy') return (await checkConnection(workflow)).objectInfo
+  if (workflow.provider !== 'runninghub') return {}
+  const key = await requireRunningHubKey()
+  // Official native proxy is read only here: never /prompt, queue creation or GPU generation.
+  // The proxy protocol embeds the key in its path. Do not persist or log this URL.
+  const prefix = workflow.instanceType === 'plus' ? '/proxy-plus/' : '/proxy/'
+  const url = RUNNINGHUB_ORIGIN + prefix + encodeURIComponent(key) + '/object_info'
+  try {
+    let result
+    if (Capacitor.isNativePlatform()) {
+      const response = await CapacitorHttp.request({ url, method: 'GET', connectTimeout: 15000, readTimeout: 30000, responseType: 'json' })
+      if (response.status !== 200) throw new Error('HTTP ' + response.status)
+      result = typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+    } else result = await request(url, {}, 30000)
+    if (!result || typeof result !== 'object' || !Object.values(result).some(v => v?.input)) throw new Error('节点定义格式不正确')
+    const classes = new Set(Object.values(workflow.graph || {}).map(n => n.class_type))
+    for (const name of ['LoadImage', 'LoadImageMask']) classes.add(name)
+    return Object.fromEntries(Object.entries(result).filter(([name]) => classes.has(name)))
+  } catch { throw new Error('未能读取完整节点定义。可导入 object_info JSON；当前选项会标明来源，不会伪造完整模型列表。') }
+}
 function upload(url, form, progress, headers = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -58,7 +81,7 @@ export async function submitTask(workflow, values, files, update) {
   if (workflow.provider === 'runninghub') return submitRunningHub(workflow, values, files, update)
   if (workflow.provider === 'runway') return submitRunway(workflow, values, files, update)
   const uploaded = {}, finalValues = copy(values)
-  const media = workflow.fields.filter(field => ['image', 'video', 'audio'].includes(field.kind) && files[field.id])
+  const media = uploadFields(workflow, files)
   for (let i = 0; i < media.length; i++) {
     const field = media[i]
     const body = new FormData()
@@ -74,7 +97,7 @@ export async function submitTask(workflow, values, files, update) {
     if (['seed', 'noise_seed'].includes(field.name) && Number(finalValues[field.id]) === -1) finalValues[field.id] = Math.floor(Math.random() * 4294967295)
     if (field.kind === 'number') finalValues[field.id] = Number(finalValues[field.id])
   }
-  const graph = materializeGraph(workflow.graph, workflow.fields, finalValues, uploaded)
+  const graph = workflow.runtime ? compileGraph(materializeMedia(workflow.graph, workflow.fields, finalValues, uploaded), workflow.fields, finalValues, workflow.runtime, nodeCatalog(workflow.graph, workflow.objectInfo), workflow.canvas, uploaded).graph : materializeGraph(workflow.graph, workflow.fields, finalValues, uploaded)
   update({ status: 'SUBMITTING', detail: '正在提交工作流，请勿重复提交', progress: null })
   const result = await request(workflow.address + '/prompt', postJSON({ prompt: graph, client_id: uid() }), 120000)
   if (!result.prompt_id || result.error) throw new Error(result.error?.message || '工作流未被接受：' + JSON.stringify(result.node_errors || result))
@@ -179,7 +202,7 @@ async function submitRunningHub(workflow, values, files, update) {
   // Validate/prune BEFORE uploading anything. A branch choice is always explicit.
   runningHubBody(workflow, values)
   const key = await requireRunningHubKey(), uploaded = {}
-  const media = workflow.fields.filter(field => field.enabled !== false && ['image', 'video', 'audio'].includes(field.kind) && files[field.id])
+  const media = uploadFields(workflow, files)
   for (const [index, field] of media.entries()) {
     const form = new FormData()
     form.append('file', files[field.id], files[field.id].name)
@@ -196,6 +219,11 @@ async function submitRunningHub(workflow, values, files, update) {
   const result = await runningHubRequest('/task/openapi/create', prepared.body, key)
   if (!result.data?.taskId || typeof result.data.taskId !== 'string') throw new Error('平台未返回字符串任务编号，请先在 RunningHub 核对任务；不会自动重提')
   return { remoteId: result.data.taskId, values: prepared.values, detail: 'RunningHub 已接收所选分支' }
+}
+function uploadFields(workflow, files) {
+  const result = workflow.fields.filter(field => field.enabled !== false && ['image', 'video', 'audio'].includes(field.kind) && files[field.id])
+  for (const field of workflow.fields) if (field.maskSlot !== undefined && files[field.id + '::$mask']) result.push({ ...field, id: field.id + '::$mask', kind: 'image', label: field.label + '遮罩' })
+  return result
 }
 export async function cancelTask(task) {
   if (task.workflow.provider !== 'comfy') throw new Error('此来源暂未适配单任务取消')

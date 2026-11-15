@@ -156,28 +156,53 @@ try:
     field('工作流链接或 ID','https://www.runninghub.cn/workflow/2121823324379631618?source=workspace')
     field('RunningHub API Key','fixture-only-not-a-real-api-key')
     click('验证密钥 · 读取云端工作流')
-    wait_text('本次执行的输出分支')
-    assert js("document.getElementById('runninghub-output').value") == ''
-    js("(()=>{const select=document.getElementById('runninghub-output');select.value='10';select.dispatchEvent(new Event('change',{bubbles:true}))})()")
-    field('分支显示名称','图像编辑')
+    wait_text('完整工作流已装配')
+    # Wait for the metadata read to finish, not just the graph import.
+    for _ in range(120):
+        if js("!document.querySelector('button.wood-button.wide[disabled]')"):break
+        time.sleep(0.25)
     field('工作流名称','RunningHub 安装验证')
-    screenshot('06-runninghub-assembly')
-    click('保存并装配')
-    wait_text('进入工作流')
-    click('进入工作流')
-    wait_text('提交工作流')
-    field('正向提示词CLIPTextEncode','RunningHub Android 单分支验证')
-    js("(()=>{const input=document.querySelector('input[type=file][aria-label=\"参考图片\"]');const d=new DataTransfer();const bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg=='),c=>c.charCodeAt(0));d.items.add(new File([bytes],'reference.png',{type:'image/png'}));input.files=d.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()")
-    click('提交工作流')
-    wait_text('已完成')
-    click('查看任务')
-    wait_text('使用相同参数')
-    screenshot('07-runninghub-result')
+    click('保存并装配');wait_text('进入工作流');click('进入工作流');wait_text('运行模块')
+    js("document.querySelector('[data-output-id=\"10\"] > button').click()")
+    wait_text('正向提示词')
+    field('正向提示词CLIPTextEncode','RunningHub Android 通用装配验证')
+    def choose_image(label,name):
+        js("""(async()=>{const input=document.querySelector('input[type=file][aria-label=' + JSON.stringify(%s) + ']');const canvas=document.createElement('canvas');canvas.width=canvas.height=64;const c=canvas.getContext('2d');c.fillStyle='#d4a45f';c.fillRect(0,0,64,64);const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));const d=new DataTransfer();d.items.add(new File([blob],%s,{type:'image/png'}));input.files=d.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()""" % (json.dumps(label),json.dumps(name)))
+    choose_image('参考图片','reference.png');choose_image('批量添加参考图','reference-2.png')
+    js("document.querySelector('[data-output-id=\"91\"] > button').click()")
+    wait_text('LoadImageGoohai');choose_image('参考图片','inactive.png')
+    js("document.querySelector('[data-output-id=\"10\"] > button').click()")
+    wait_text('正向提示词')
+    assert js("document.querySelector('textarea').value")=='RunningHub Android 通用装配验证'
+    assert js("document.querySelectorAll('.reference-rack .media-drop.filled').length")==2
+    js("document.querySelector('.runtime-panel details').open=true")
+    js("(()=>{const select=document.querySelector('select[aria-label=\"节点 93运行状态\"]');select.value='bypass';select.dispatchEvent(new Event('change',{bubbles:true}))})()")
+    def select_field(field_id,value):
+        js("(()=>{const s=document.getElementById("+json.dumps('field-'+field_id)+");s.value="+json.dumps(value)+";s.dispatchEvent(new Event('change',{bubbles:true}))})()")
+    select_field('4::sampler_name','dpmpp_2m')
+    js("[...document.querySelectorAll('details')].find(d=>d.querySelector('summary')?.textContent.includes('高级参数')).open=true")
+    select_field('9::ckpt_name','fixture-alternative.safetensors')
+    screenshot('06-generic-workbench')
+    click('画遮罩');wait_text('遮罩画板')
+    for _ in range(120):
+        if js("document.querySelector('.mask-canvas')?.width===64"):break
+        time.sleep(0.25)
+    js("(()=>{const c=document.querySelector('.mask-canvas'),b=c.getBoundingClientRect();for(const [type,x] of [['pointerdown',.4],['pointermove',.6],['pointerup',.6]])c.dispatchEvent(new PointerEvent(type,{pointerId:1,clientX:b.x+b.width*x,clientY:b.y+b.height*.5,bubbles:true}))})()")
+    screenshot('07-mask-editor-native');click('保存遮罩');wait_text('编辑遮罩')
+    click('提交工作流');wait_text('已完成');click('查看任务');wait_text('使用相同参数')
+    screenshot('08-generic-result')
     rh_jobs=json.load(urllib.request.urlopen('http://127.0.0.1:5173/test-runninghub'))
     assert len(rh_jobs)==1,rh_jobs
     request=next(iter(rh_jobs.values()))['request'];rh_graph=json.loads(request['workflow'])
-    assert '91' not in rh_graph and rh_graph['1']['inputs']['image']=='openapi/fixture-uploaded.png'
-    assert rh_graph['2']['inputs']['text']=='RunningHub Android 单分支验证'
+    assert '91' not in rh_graph and '90' not in rh_graph and '93' not in rh_graph
+    assert rh_graph['4']['inputs']['model']==['9',0]
+    assert rh_graph['4']['inputs']['sampler_name']=='dpmpp_2m'
+    assert rh_graph['9']['inputs']['ckpt_name']=='fixture-alternative.safetensors'
+    assert rh_graph['2']['inputs']['text']=='RunningHub Android 通用装配验证'
+    assert rh_graph[rh_graph['94']['inputs']['image2'][0]]['class_type']=='LoadImage'
+    assert rh_graph[rh_graph['6']['inputs']['mask'][0]]['class_type']=='LoadImageMask'
+    assert rh_graph[rh_graph['6']['inputs']['mask'][0]]['inputs']['channel']=='red'
+    assert len(next(iter(rh_jobs.values()))['uploads'])==3
     assert js("window.__fixtureNativeUrls.some(url=>url.includes('/rh/openapi/v2/media/upload/binary'))") is True
     # Keystore ciphertext is checked on disk, and decryption must survive process death.
     encrypted=adb('shell','run-as',APP,'cat','shared_prefs/latula-credentials.xml',text=True)
@@ -189,11 +214,11 @@ try:
     attach();wait_text('RunningHub 安装验证');click('进入工作流');wait_text('提交工作流')
     assert js("document.getElementById('workbench-key').value==='fixture-only-not-a-real-api-key'") is True
     assert len(json.load(urllib.request.urlopen('http://127.0.0.1:5173/test-runninghub')))==1,'Restart must not resubmit'
-    screenshot('08-runninghub-key-restored')
+    screenshot('09-key-restored')
     logs = adb('logcat', '-d', '-s', 'AndroidRuntime:E', text=True)
     (OUT / 'android-runtime.log').write_text(logs)
     assert 'FATAL EXCEPTION' not in logs, logs
-    (OUT / 'summary.txt').write_text('PASS: Android 15 API 35 emulator: install/launch/settings/native back; ComfyUI import/schema/native HTTP upload/submit/result/favorite/restart. RunningHub local fixture: pasted link, JSON read, mandatory branch, upload, one submit, V2 results; Android Keystore ciphertext and cold-restart decryption; no automatic resubmit or AndroidRuntime fatal exception. No real platform API, GPU generation, physical phone picker or paid API used.\n')
+    (OUT / 'summary.txt').write_text('PASS: Android 15 API 35 emulator: install/launch/settings/native back; ComfyUI import/schema/native HTTP upload/submit/result/favorite/restart. RunningHub local fixture: generic schema, runtime module switching with retained drafts/files, typed bypass, model/sampler dropdowns, two images and drawn MASK in native upload, one submit, V2 results; Android Keystore ciphertext and cold-restart decryption; no automatic resubmit or AndroidRuntime fatal exception. No real platform API, GPU generation, physical phone picker or paid API used.\n')
     print((OUT / 'summary.txt').read_text())
 except Exception:
     screenshot('failure')

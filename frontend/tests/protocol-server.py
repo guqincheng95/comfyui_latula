@@ -1,13 +1,28 @@
 # Local protocol fixture. No model, GPU, billing, or real AI output.
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-import json, time
+import json, time, copy
 from email.parser import BytesParser
 from email import policy
 ROOT=Path(__file__).resolve().parent.parent
 GRAPH=json.loads((ROOT/'tests/fixtures/basic-api.json').read_text())
-RH_GRAPH={**GRAPH,'90':{'class_type':'LoadImageGoohai','inputs':{'image':'other.png','保留透明通道':False}},'91':{'class_type':'SaveImage','inputs':{'images':['90',0]}}}
+RH_GRAPH={**copy.deepcopy(GRAPH),'90':{'class_type':'LoadImageGoohai','inputs':{'image':'other.png','保留透明通道':False}},'91':{'class_type':'SaveImage','inputs':{'images':['90',0]}}}
+RH_GRAPH['6']={'class_type':'LatulaFixtureInpaint','inputs':{'pixels':['94',0],'mask':['1',1],'vae':['9',2]}}
+RH_GRAPH['93']={'class_type':'LatulaFixtureLora','inputs':{'model':['9',0],'strength':0.7}}
+RH_GRAPH['94']={'class_type':'LatulaFixtureReference','inputs':{'image1':['1',0]}}
+RH_GRAPH['4']['inputs']['model']=['93',0]
+def object_info(graph):
+    info={node['class_type']:{'input':{'required':{}},'output':[]} for node in graph.values()}
+    info['LoadImage']={'input':{'required':{'image':['STRING',{'image_upload':True}]}},'output':['IMAGE','MASK']}
+    info['LoadImageMask']={'input':{'required':{'image':['STRING',{'image_upload':True}],'channel':[['alpha','red','green','blue']]}},'output':['MASK']}
+    info['KSampler']={'input':{'required':{'seed':['INT',{'min':0,'max':4294967295}],'steps':['INT',{'min':1,'max':100}],'sampler_name':[['euler','dpmpp_2m']],'scheduler':[['normal','karras']]}},'output':['LATENT']}
+    info['CheckpointLoaderSimple']={'input':{'required':{'ckpt_name':[['protocol-test-only.safetensors','fixture-alternative.safetensors']]}},'output':['MODEL','CLIP','VAE']}
+    info['LatulaFixtureLora']={'input':{'required':{'model':['MODEL'],'strength':['FLOAT',{'min':0,'max':2}]}},'output':['MODEL']}
+    info['LatulaFixtureReference']={'input':{'required':{'image1':['IMAGE']},'optional':{'image2':['IMAGE'],'image3':['IMAGE']}},'output':['IMAGE']}
+    info['LatulaFixtureInpaint']={'input':{'required':{'pixels':['IMAGE'],'mask':['MASK'],'vae':['VAE']}},'output':['LATENT']}
+    return info
 RH_JOBS={}
+RH_UPLOADS=[]
 JOBS={}
 UPLOADS=[]
 class Handler(SimpleHTTPRequestHandler):
@@ -22,10 +37,10 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         p=self.path
         if p=='/mock/system_stats':return self.out({'system':{'os':'protocol-fixture'}})
-        if p=='/mock/object_info':
-            data={node['class_type']:{'input':{'required':{}}} for node in GRAPH.values()}
-            data['KSampler']['input']['required']={'seed':['INT',{'min':0,'max':4294967295}],'steps':['INT',{'min':1,'max':100}],'sampler_name':[['euler','dpmpp_2m']],'scheduler':[['normal','karras']]}
-            return self.out(data)
+        if p=='/mock/object_info':return self.out(object_info(GRAPH))
+        if p.startswith('/rh/proxy/') or p.startswith('/rh/proxy-plus/'):
+            if p.endswith('/fixture-only-not-a-real-api-key/object_info'):return self.out(object_info(RH_GRAPH))
+            return self.out({'error':'Invalid fixture path'},403)
         if p.startswith('/mock/history/'):
             key=p.rsplit('/',1)[1];job=JOBS.get(key)
             if not job:return self.out({})
@@ -39,6 +54,7 @@ class Handler(SimpleHTTPRequestHandler):
             data=(ROOT/'tests/fixtures/basic-api.json').read_bytes();self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(data);return
         if p=='/test-captured':return self.out(JOBS)
         if p=='/test-runninghub':return self.out(RH_JOBS)
+        if p=='/test-runninghub-uploads':return self.out(RH_UPLOADS)
         return super().do_GET()
     def do_POST(self):
         if self.headers.get('Transfer-Encoding','').lower()=='chunked':
@@ -57,15 +73,17 @@ class Handler(SimpleHTTPRequestHandler):
                 message=BytesParser(policy=policy.default).parsebytes(('Content-Type: '+self.headers.get('Content-Type','')+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
                 media=next((p for p in message.iter_parts() if p.get_param('name',header='content-disposition')=='file' and p.get_filename()),None)
                 if media is None or not media.get_payload(decode=True):return self.out({'code':400,'message':'Expected file','type':self.headers.get('Content-Type'),'bodySize':len(body),'parts':[{'name':p.get_param('name',header='content-disposition'),'filename':p.get_filename()} for p in message.iter_parts()]},400)
-                return self.out({'code':0,'data':{'fileName':'openapi/fixture-uploaded.png'}})
+                filename='openapi/fixture-uploaded-'+str(len(RH_UPLOADS)+1)+'.png'
+                RH_UPLOADS.append({'filename':media.get_filename(),'size':len(media.get_payload(decode=True)),'serverName':filename})
+                return self.out({'code':0,'data':{'fileName':filename}})
             payload=json.loads(body)
             if self.path.endswith('/getJsonApiFormat'):return self.out({'code':0,'data':{'prompt':json.dumps(RH_GRAPH)}})
             if self.path.endswith('/create'):
                 key='212182332437963'+str(1000+len(RH_JOBS));graph=json.loads(payload['workflow'])
                 if '90' in graph or '91' in graph:return self.out({'code':400,'msg':'Unselected branch submitted'},400)
-                if graph['1']['inputs']['image']!='openapi/fixture-uploaded.png':return self.out({'code':400,'msg':'Upload path missing'},400)
+                if not graph['1']['inputs']['image'].startswith('openapi/fixture-uploaded-'):return self.out({'code':400,'msg':'Upload path missing'},400)
                 payload.pop('apiKey',None)
-                RH_JOBS[key]={'request':payload}
+                RH_JOBS[key]={'request':payload,'uploads':list(RH_UPLOADS)}
                 return self.out({'code':0,'data':{'taskId':key,'taskStatus':'QUEUED'}})
             if self.path.endswith('/query'):
                 if payload['taskId'] not in RH_JOBS:return self.out({'status':'FAILED','errorMessage':'Unknown fixture task'})

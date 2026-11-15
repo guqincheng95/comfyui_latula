@@ -175,6 +175,6 @@ jobs:
             cmp "output/$APK_NAME" "/tmp/latula-existing/$APK_NAME"
           else
             gh release create "$TAG" output/* --target "$SOURCE_SHA" \
-              --title "拉图 $VERSION · RunningHub 测试版" --prerelease \
+              --title "拉图 $VERSION · 通用装配测试版" --prerelease \
               --notes-file "docs/RELEASE_NOTES_$VERSION.md"
           fi

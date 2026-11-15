@@ -1,8 +1,8 @@
 # 拉图 · comfyui_latula
 
-版本 **0.02 RunningHub 测试版**（npm 版本 0.0.3，Android versionCode 304）。
+版本 **0.03 通用装配测试版**（npm 版本 0.0.4，Android versionCode 305）。
 
-**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.02/latula-v0.02-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.02)
+**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.03/latula-v0.03-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.03)
 
 手机安装请下载 `.apk` 文件；发布页中的 Source code 是源码压缩包。
 
@@ -27,11 +27,12 @@
 1. 装配工作流 → 接入 RunningHub 工作流，粘贴网页完整链接或工作流 ID。
 2. 填写自己的 API Key。安卓使用 Android Keystore 的 AES-GCM 加密保存；密钥与配置/任务快照分离，不写入仓库、安装包或日志。网页预览只保留在内存，刷新需重填。
 3. 选择「验证密钥 · 读取云端工作流」，或手动导入平台导出的 API JSON；读取会更新装配台的 JSON。验证仅查询工作流，不创建生成任务。
-4. 必须选择一个输出分支，可自定义分支名称；保存多份装配配置可用于快速切换各模式。
+4. 保存完整工作流；进入运行页面点击功能道具切换模块，也可勾选组合输出。切换保留各模块参数和已选素材，无需返回装配或复制配置。
+5. 运行页「模块命名与旁路控制」可启用、停用节点或按类型透传旁路线；无法唯一匹配时阻止提交，不猜测连线。
 5. 保存并装配，进入工作流，重新上传素材、填写提示词和参数后手动提交。
 6. 使用官方完整 workflow 参数提交所选输出及依赖节点，保持原始 JSON；不是只隐藏其他表单。返回的任务 ID 用于 V2 查询，重要结果及时保存。
 
-密钥只发送到固定 HTTPS 域名 www.runninghub.cn。生成使用自己的 RunningHub 账户额度；鉴权、工作流权限、节点和模型是否可运行以平台真实响应为准。本轮协议/安装检查使用本地模拟服务，未使用用户密钥调用付费 GPU 任务。遮罩绘制、复杂自定义前端控件仍需后续适配。
+密钥只发送到固定 HTTPS 域名 www.runninghub.cn。生成使用自己的 RunningHub 账户额度；鉴权、工作流权限、节点和模型是否可运行以平台真实响应为准。本轮协议/安装检查使用本地模拟服务，未使用用户密钥调用付费 GPU 任务。支持图片画笔/橡皮、撤销、清空、反选和独立黑白 MASK 上传；原图 RGB 保留。复杂自定义前端脚本仍需节点类型能力声明，不承诺任意未知脚本都能自动重建。
 
 ## ComfyUI 第一次使用
 
@@ -47,7 +48,9 @@
 
 - 原生 ComfyUI HTTP API：/system_stats、/object_info、/upload/image、/prompt、/history、/queue、/view。
 - LoadImage、常见 CLIP/TextEncode、KSampler、尺寸/种子等标准输入有适配；其他节点的基础类型可依服务端定义装配。
-- 不保证任意自定义节点的前端交互、复杂列表、遮罩绘制、专有上传协议自动兼容。特殊节点适配集中在 frontend/src/lib/workflow.js。
+- 通用装配层 frontend/src/lib/graph-ui.js 按服务端 object_info 生成端口/下拉/范围/旁路，多图通过真实 IMAGE 端口注入加载节点；不按工作流 ID 或固定节点编号写逻辑。
+- API JSON 常缺下拉完整列表和分组。可自动同步服务端定义，或导入 object_info / 普通画布补充分组。没有完整定义时下拉明确标注「工作流已有值」，新增图像端口在提交前需服务端定义确认；不会把猜测的模型列表当作实际库存。
+- 遮罩使用独立 LoadImageMask/channel=red，重接 MASK 连线，不把涂色写入原图。支持 2400 万像素以内图像。复杂动态控件/自定义前端脚本仍需通用节点类型适配，不能单凭 API JSON 重建缺失的全部前端行为。
 - RunningHub 工作流 API：链接/ID 导入、读取云端 API JSON、单输出分支裁剪、官方上传和创建任务、V2 结果查询；AI 应用 webappId、平台取消和账户额度查询暂未接入。
 - 取消只作用于原生 ComfyUI 中尚未开始的指定排队任务，不调用全局中断。
 - 原文件链接可能失效，重要作品请主动保存。卸载应用会清除本地记录。
@@ -78,6 +81,8 @@ Android：GitHub Actions 自动安装依赖、检查、生成原生项目、同�
 ## 项目文档
 
 - [固定签名与自动构建配置](docs/ANDROID_SIGNING.md)
+- [0.03 更新说明](docs/RELEASE_NOTES_0.03.md)
+- [通用装配架构与验证](docs/UNIVERSAL_ASSEMBLY.md)
 - [0.02 更新说明](docs/RELEASE_NOTES_0.02.md)
 - [RunningHub 接口与边界](docs/RUNNINGHUB.md)
 - [0.01 测试说明](docs/RELEASE_0.01.md)
