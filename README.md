@@ -2,6 +2,10 @@
 
 版本 **0.01 初航测试版**（npm 版本 0.0.1，Android versionCode 301）。
 
+**[下载 Android APK](https://github.com/guqincheng95/comfyui_latula/releases/download/v0.01/latula-v0.01-test.apk)** · [版本发布页 / Releases](https://github.com/guqincheng95/comfyui_latula/releases/tag/v0.01)
+
+手机安装请下载 `.apk` 文件；发布页中的 Source code 是源码压缩包。
+
 拉图是 ComfyUI / AI API 的便捷操作前端。模型推理和图片、视频生成在用户连接的电脑或云端服务中完成。
 
 ## 0.01 已实现

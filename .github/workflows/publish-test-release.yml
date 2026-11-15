@@ -1,0 +1,63 @@
+name: Publish validated 0.01 APK
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-test-release.yml']
+  workflow_dispatch:
+concurrency:
+  group: latula-release-v001
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify the previously tested source build
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/43632068504" > /tmp/latula-source-run.json
+          python - <<'PY'
+          import json
+          with open('/tmp/latula-source-run.json') as f:
+              run = json.load(f)
+          assert run['conclusion'] == 'success', 'Source build and emulator checks must have passed'
+          assert run['head_sha'] == '7b14be8e580e6b4a48edad170db08d72713f4b4e', 'Unexpected source commit'
+          assert run['name'] == 'Build Android APK', 'Unexpected source workflow'
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: latula-v0.01-test
+          path: output
+          run-id: 43632068504
+          github-token: ${{ github.token }}
+      - name: Verify the exact APK delivered for testing
+        run: |
+          sha256sum -c output/SHA256SUMS.txt
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p = Path('output/latula-v0.01-test.apk')
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == '54018d34958ce402fcfbee2a6eec8a214e231ce7927ea0e45753f55b78202971', 'Unexpected APK bytes'
+          PY
+      - name: Publish the test release with installable assets
+        run: |
+          if gh release view v0.01 >/dev/null 2>&1; then
+            mkdir -p /tmp/latula-existing
+            gh release download v0.01 --pattern latula-v0.01-test.apk --dir /tmp/latula-existing
+            cmp output/latula-v0.01-test.apk /tmp/latula-existing/latula-v0.01-test.apk
+          else
+            gh release create v0.01 output/latula-v0.01-test.apk output/SHA256SUMS.txt \
+              --target 7b14be8e580e6b4a48edad170db08d72713f4b4e \
+              --title '拉图 0.01 · 初航测试版' \
+              --prerelease --notes-file docs/RELEASE_NOTES_0.01.md
+          fi
