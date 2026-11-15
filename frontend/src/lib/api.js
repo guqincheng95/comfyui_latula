@@ -46,7 +46,7 @@ function upload(url, form, progress, headers = {}) {
     xhr.onload = () => {
       const result = xhr.response
       if (xhr.status >= 200 && xhr.status < 300) resolve(result)
-      else reject(new Error(typeof result?.detail === 'string' ? result.detail : '上传失败，HTTP ' + xhr.status))
+      else reject(new Error([result?.detail, result?.message, result?.msg].find(value => typeof value === 'string') || '上传失败，HTTP ' + xhr.status))
     }
     xhr.onerror = () => reject(new Error('上传连接中断，请检查网络'))
     xhr.ontimeout = () => reject(new Error('上传超时，请检查素材大小与网络'))

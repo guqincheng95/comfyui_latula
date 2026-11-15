@@ -142,6 +142,7 @@ async function test(workflow) {
   finally { testing.value = false; if (!draft.value) await persist() }
 }
 async function saveWorkflow(equip = true) {
+  if (testing.value || importing.value) return notify('请等待工作流读取完成后再保存')
   try {
     const workflow = draft.value
     normalizeWorkflow(workflow)

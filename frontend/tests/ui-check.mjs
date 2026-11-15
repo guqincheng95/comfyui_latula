@@ -67,15 +67,15 @@ for(const [width,height] of [[360,640],[430,932]]){
  await page.screenshot({path:path.join(root,'test-results/workbench-'+width+'.png'),fullPage:true})
 }
 assert.deepEqual(errors,[],'no uncaught runtime errors')
-// Route every platform request to a local fixture: never contact a billable API.
-await page.route('https://www.runninghub.cn/**', async route => {
- const url = new URL(route.request().url())
- const response = await route.fetch({url:'http://127.0.0.1:5173/rh'+url.pathname,postData:route.request().postDataBuffer(),headers:await route.request().allHeaders()})
- if(response.status()>=400)console.log('Fixture response:',await response.text())
- await route.fulfill({response})
+// Redirect before sending: Chromium DevTools postData omits uploaded file bytes,
+// so route.fetch would replay an empty file. Production has no URL override.
+await page.evaluate(()=>{
+ const rewrite=url=>typeof url==='string'&&url.startsWith('https://www.runninghub.cn/')?'http://127.0.0.1:5173/rh'+new URL(url).pathname:url
+ const original=window.fetch.bind(window);window.fetch=(url,init)=>original(rewrite(url),init)
+ const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...args){return open.call(this,method,rewrite(url),...args)}
 })
 const platformResponses=[]
-page.on('response',response=>{if(response.url().startsWith('https://www.runninghub.cn/'))platformResponses.push({url:response.url(),status:response.status()})})
+page.on('response',response=>{if(response.url().includes('/rh/'))platformResponses.push({url:response.url(),status:response.status()})})
 await page.evaluate(()=>{window.__testToasts=[];new MutationObserver(()=>{const text=document.querySelector('.toast')?.textContent;if(text&&!window.__testToasts.includes(text))window.__testToasts.push(text)}).observe(document.body,{childList:true,subtree:true})})
 await page.getByRole('button',{name:'返回主页',exact:true}).click()
 await page.getByRole('button',{name:'装配工作流',exact:true}).click()
