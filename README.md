@@ -81,7 +81,7 @@ Android：GitHub Actions 自动安装依赖、检查、生成原生项目、同�
 ## 项目文档
 
 - [固定签名与自动构建配置](docs/ANDROID_SIGNING.md)
-- [0.03 更新说明](docs/RELEASE_NOTES_0.03.md)
+- [0.03.1 更新说明](docs/RELEASE_NOTES_0.03.1.md)
 - [通用装配架构与验证](docs/UNIVERSAL_ASSEMBLY.md)
 - [0.02 更新说明](docs/RELEASE_NOTES_0.02.md)
 - [RunningHub 接口与边界](docs/RUNNINGHUB.md)
